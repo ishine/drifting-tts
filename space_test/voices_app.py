@@ -1,7 +1,8 @@
-"""Drifting TTS, new voices (private test Space): ARDrift (docs/AR_DRIFT.md) fine-tuned with six voices learned from
-16 kHz recordings, and the mel bandwidth extension (drifting_tts/bwe.py) that fills their mels above ~8 kHz.
+"""Drifting TTS, new voices (the "Yeni sesler" tab of the private test Space, app.py): ARDrift (docs/AR_DRIFT.md)
+fine-tuned with six voices learned from 16 kHz recordings, and the mel bandwidth extension (drifting_tts/bwe.py) that
+fills their mels above ~8 kHz. Runs on its own too (``python voices_app.py``).
 
-Files beside this app (``scripts/deploy_voices_space.sh``): ``ardrift_voices.pt`` (the model), ``bwe.pt`` (MelBWE) and
+Files beside this app (``scripts/deploy_test_space.sh``): ``ardrift_voices.pt`` (the model), ``bwe.pt`` (MelBWE) and
 ``voices.json`` (each voice's label, speaker ID, whether its recordings are band-limited and its measured results).
 """
 

@@ -170,7 +170,8 @@ pitch from the recordings' median F0; the studio voice as the regression check):
 - **Lower UTMOSv2 than the studio voice (2.18-2.54 against 2.95),** largely the recordings' own quality: their DNSMOS
   OVRL is ~3.0, the outputs' 2.90-3.25. UTMOSv2, DNSMOS and SIM run at 16 kHz and do not see the bandwidth extension.
 - **The existing voices are kept** (studio 0.33% / 2.953 against 0.55% / 3.026 before).
-- In a private test Space only (`space_voices/`, `scripts/deploy_voices_space.sh`, which refuses a public Space).
+- In a private test Space only (`space_test/`, `scripts/deploy_test_space.sh`, which refuses a public Space): one
+  tab for these voices, one for ARDrift next to v3.2 and v3.1, one for the results.
 
 ## Commands
 
@@ -189,7 +190,7 @@ drifting-tts merge-data --out data/tr12_eleven_podfa data/tr12_eleven data/voice
 drifting-tts train-ar --config configs/ar_tts_voices.yaml --workdir runs/ar_voices
 drifting-tts train-ar --config configs/ar_tts_voices_fa.yaml --workdir runs/ar_voices_fa
 drifting-tts train-bwe --data data/tr12_eleven --workdir runs/bwe
-scripts/deploy_voices_space.sh <private space> <exported model> runs/bwe/bwe.pt voices.json
+scripts/deploy_test_space.sh <private space> <exported ARDrift> <exported voices model> runs/bwe/bwe.pt voices.json
 ```
 
 ```python
