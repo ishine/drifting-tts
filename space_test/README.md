@@ -7,7 +7,7 @@ sdk: gradio
 app_file: app.py
 pinned: false
 license: other
-short_description: Models under test: ARDrift, new voices, v3.2 (private)
+short_description: ARDrift, new voices and v3.2 under test (private)
 ---
 
 Private test of the models of [kadirnar/drifting-tts](https://github.com/kadirnar/drifting-tts) that are not released,
