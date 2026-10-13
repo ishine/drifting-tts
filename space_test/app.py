@@ -4,14 +4,22 @@
   bandwidth extension (drifting_tts/bwe.py).
 - "ARDrift ve v3.2": the public demo's app (``space/app.py``, staged as ``demo_app.py``), which offers ARDrift
   (docs/AR_DRIFT.md) next to v3.2 and v3.1 when ``ardrift.pt`` is beside it.
-- "Sonuçlar": the measured results of both.
+- "English": ``english_app.py``, ARDrift trained on 10,000 h of English (docs/ENGLISH.md), when ``ardrift_en.pt`` is
+  beside it.
+- "Sonuçlar": the measured results of all of them.
 
-``scripts/deploy_test_space.sh`` stages the two apps beside this one with their files.
+``scripts/deploy_test_space.sh`` stages the apps beside this one with their files.
 """
+
+from pathlib import Path
 
 import demo_app
 import gradio as gr
 import voices_app
+
+ENGLISH = (Path(__file__).parent / "ardrift_en.pt").is_file()
+if ENGLISH:
+    import english_app
 
 ARDRIFT_RESULTS_MD = """
 ### ARDrift ve v3.2 (Freya-TR-Eval, 495 cümle)
@@ -39,14 +47,19 @@ with gr.Blocks(title="Drifting TTS: özel test") as demo:
         "# Drifting TTS: özel test\n"
         "Test edilen bütün modeller tek yerde. **Yeni sesler:** ARDrift'in altı yeni sesle eğitilmiş hali. "
         "**ARDrift ve v3.2:** kendi otoregresif modelimiz ARDrift, herkese açık demodaki v3.2 ve v3.1 ile yan yana. "
-        "**Sonuçlar:** ölçümler."
+        + ("**English:** ARDrift'in 10.000 saatlik İngilizce veriyle eğitilmiş hali. " if ENGLISH else "")
+        + "**Sonuçlar:** ölçümler."
     )
     with gr.Tab("Yeni sesler"):
         voices_app.demo.render()
     with gr.Tab("ARDrift ve v3.2"):
         demo_app.demo.render()
+    if ENGLISH:
+        with gr.Tab("English"):
+            english_app.demo.render()
     with gr.Tab("Sonuçlar"):
-        gr.Markdown(ARDRIFT_RESULTS_MD + voices_app.results_md())
+        gr.Markdown(ARDRIFT_RESULTS_MD + voices_app.results_md()
+                    + ("\n\n### English\n\n" + english_app.results_md() if ENGLISH else ""))
 
 if __name__ == "__main__":
     demo.queue(max_size=20).launch()

@@ -271,9 +271,11 @@ class UTMOS22:
 
 
 def load_judges(asr: str | None = "large-v3", sv: str | None = "wavlm-large-ecapa", mos: str | None = "utmosv2",
-                device: str = "cuda", mos_repetitions: int = 1, language: str = "tr") -> Judges:
-    """Build the requested judges (``None`` / ``"none"`` skips one); ``language``: what Whisper transcribes. A judge
-    whose dependency is missing is disabled with a message, and evaluation goes on without that metric."""
+                device: str = "cuda", mos_repetitions: int = 1, language: str = "tr",
+                asr_device: str | None = None) -> Judges:
+    """Build the requested judges (``None`` / ``"none"`` skips one); ``language``: what Whisper transcribes,
+    ``asr_device``: where (default ``device``; ``cpu`` beside a training run that holds the GPU). A judge whose
+    dependency is missing is disabled with a message, and evaluation goes on without that metric."""
 
     def build(what: str, name: str | None, factory: Callable):
         if name in (None, "none"):
@@ -287,7 +289,7 @@ def load_judges(asr: str | None = "large-v3", sv: str | None = "wavlm-large-ecap
     if mos not in (None, "none", *MOS_MODELS):
         raise ValueError(f"unknown MOS model {mos!r}; choose from {', '.join(MOS_MODELS)}")
     return Judges(
-        asr=build("ASR", asr, lambda: WhisperASR(asr, device, language=language)),
+        asr=build("ASR", asr, lambda: WhisperASR(asr, asr_device or device, language=language)),
         sv=build("speaker", sv, lambda: SpeakerEmbedder(sv, device)),
         mos=build("MOS", mos, lambda: UTMOSv2(device, mos_repetitions) if mos == "utmosv2" else UTMOS22(device)),
     )
