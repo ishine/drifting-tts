@@ -17,7 +17,7 @@ from .audio import HOP_LENGTH, SAMPLE_RATE
 from .chunked import Chunking
 from .data import MelStats
 from .latents import VAE_BACKENDS
-from .text import group_sentences, normalize, split_sentences, text_to_ids  # noqa: F401 (split_sentences re-exported)
+from .text import frontend, group_sentences, normalize, split_sentences, text_to_ids  # noqa: F401 (re-exported)
 from .voices import DEFAULT_VOICE, VOICES, voice_id
 
 DEFAULT_TEMPERATURE = 0.5  # CLI default noise temperature (lowest CER in the README sweep)
@@ -170,6 +170,8 @@ class Synthesizer:
         from .vocoder import load_vocoder
 
         self.model, self.cfg, stats = load_tts(model_path, device)
+        self.language = self.cfg.model.text.get("language", "tr")
+        self.text = frontend(self.language)  # normalisation and symbols of the model's language
         self.stats = MelStats(stats["mean"], stats["std"])
         self.backend = stats.get("backend", "vocos")
         if self.backend in VAE_BACKENDS:  # a model trained on VAE latents: the VAE decoder is the vocoder
@@ -251,21 +253,22 @@ class Synthesizer:
         return other
 
     @staticmethod
-    def with_context(sentence: str, previous: str | None) -> tuple[list[int], int]:
+    def with_context(sentence: str, previous: str | None, language: str = "tr") -> tuple[list[int], int]:
         """Token ids of the end of ``previous`` (whole words, so that both fit in :data:`CONTEXT_CHARS`), a space and
         ``sentence``, and the number of leading context tokens (``0``: no context)."""
+        to_ids = frontend(language).text_to_ids
         room = CONTEXT_CHARS - len(sentence) - 1
         ctx = (previous or "")[-room:] if room > 0 else ""
         if previous and len(ctx) < len(previous):  # cut at a word boundary
             ctx = ctx.partition(" ")[2]
         if not ctx.strip():
-            return text_to_ids(sentence, normalized=True), 0
-        return text_to_ids(f"{ctx} {sentence}", normalized=True), 2 * len(ctx) + 2
+            return to_ids(sentence, normalized=True), 0
+        return to_ids(f"{ctx} {sentence}", normalized=True), 2 * len(ctx) + 2
 
     def units(self, text: str, paragraph: bool | int | None = None) -> list[str]:
         """The normalised pieces of ``text`` that are synthesised in one pass each: its sentences, or with
         ``paragraph`` (default: the Synthesizer's) groups of consecutive sentences (:func:`group_sentences`)."""
-        sentences = split_sentences(normalize(text))
+        sentences = split_sentences(self.text.normalize(text))
         paragraph = self.paragraph if paragraph is None else paragraph
         if not paragraph:
             return sentences
@@ -409,7 +412,7 @@ class Synthesizer:
         """One normalised sentence -> normalised mel ``[1, n_mels, T]`` (CUDA graphs when ``fast`` allows it).
         ``rhythm``: the speaker whose durations are sampled and the edge factor (:meth:`_rhythm`); ``previous``: the
         text before it, as left context (:meth:`with_context`)."""
-        ids, ctx = self.with_context(sentence, previous)
+        ids, ctx = self.with_context(sentence, previous, self.language)
         ids = torch.tensor([ids], device=self.device)
         pt = self.prosody_temperature if prosody_temperature is None else prosody_temperature
         dt = self.prosody_duration_temperature if self.prosody_durations == "sampled" else None
@@ -446,7 +449,7 @@ class Synthesizer:
         """:meth:`_mel` without the DiT, for :mod:`drifting_tts.chunked`: the noise scaled by ``temperature``
         ``[1, n_mels, T]``, the aligned condition ``[1, C, T]``, the CFG scale ``[1]`` and the style codes, with the
         same draws from ``g`` (CUDA graphs for the encoder when ``fast`` allows it)."""
-        ids, ctx = self.with_context(sentence, previous)
+        ids, ctx = self.with_context(sentence, previous, self.language)
         ids = torch.tensor([ids], device=self.device)
         pt = self.prosody_temperature if prosody_temperature is None else prosody_temperature
         dt = self.prosody_duration_temperature if self.prosody_durations == "sampled" else None
@@ -488,7 +491,7 @@ class Synthesizer:
 
         if not batchable(self):
             raise NotImplementedError("counter-based noise supports the prosody sources of batched synthesis")
-        ids = text_to_ids(sentence, normalized=True)
+        ids = self.text.text_to_ids(sentence, normalized=True)
         keys = Philox([seed], [k])
         pt = self.prosody_temperature if prosody_temperature is None else prosody_temperature
         pt = 1.0 if pt is None else pt
@@ -633,7 +636,7 @@ class Synthesizer:
         sizes = () if ctx is None else (first + ctx, chunk + 2 * ctx)
         rng, previous = random.Random(seed), None
         for sentence, prev in self._units(text, paragraph, context):
-            ids, c = self.with_context(sentence, prev)
+            ids, c = self.with_context(sentence, prev, self.language)
             ids = torch.tensor([ids], device=self.device)
             cond, _ = m.aligned_condition(ids, torch.tensor([ids.shape[1]], device=self.device), spk,
                                           length_scale * tempo, context=c)

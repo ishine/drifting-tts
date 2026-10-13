@@ -118,12 +118,22 @@ def run(args) -> None:
     seed_everything(tc.seed)
     device = "cuda" if torch.cuda.is_available() and not tc.get("cpu", False) else "cpu"
 
-    ds, loader = build_loader(cfg)
-    val_ds = MelDataset(cfg.data.root, "val", min_frames=1, max_frames=10**9)
+    if cfg.data.get("stream"):  # a corpus larger than the disk, read from its parquet shards (drifting_tts/stream.py)
+        from .stream import stream_loader
+
+        ds, loader = stream_loader(cfg)
+        val_ds = ds
+    else:
+        ds, loader = build_loader(cfg)
+        val_ds = MelDataset(cfg.data.root, "val", min_frames=1, max_frames=10**9)
+    if ds.language != cfg.model.text.get("language", "tr"):
+        raise ValueError(f"{cfg.data.root} is {ds.language!r} text (stats.json), the model's text frontend is "
+                         f"{cfg.model.text.get('language', 'tr')!r}: set model.text.language")
     model = ARDriftTTS(cfg.model, num_speakers=ds.num_speakers, n_mels=ds.dim).to(device)
     print(f"ARDrift: text encoder {count_params(model.encoder):.2f}M, backbone "
           f"{count_params(model) - count_params(model.encoder) - count_params(model.head):.2f}M, head "
-          f"{count_params(model.head):.2f}M; {len(ds)} training utterances", flush=True)
+          f"{count_params(model.head):.2f}M; "
+          + ("streamed training data" if cfg.data.get("stream") else f"{len(ds)} training utterances"), flush=True)
     tau = torch.nn.Parameter(torch.tensor(float(cfg.drift.get("tau_init", 1.0)), device=device))
     betas = tuple(tc.get("betas", (0.9, 0.999)))
     opt = torch.optim.AdamW([{"params": list(model.parameters())},
@@ -141,7 +151,10 @@ def run(args) -> None:
         opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"])
         step, rng = ck["step"], ck.get("rng")
-        loader.batch_sampler.epoch = ck.get("epoch", 0)
+        if cfg.data.get("stream"):  # another shard order than before the restart (the stream has no position)
+            loader.dataset.epoch = ck.get("step", 0)
+        else:
+            loader.batch_sampler.epoch = ck.get("epoch", 0)
         print(f"resumed from step {step}", flush=True)
     elif tc.get("init_from"):  # fine-tuning (e.g. a new voice): speaker tables grown, temperature carried over
         init = torch.load(tc.init_from, map_location="cpu", weights_only=False)
@@ -195,7 +208,7 @@ def run(args) -> None:
         if step % tc.save_every == 0 or step == tc.steps:
             save_checkpoint(work / "last.pt", model=model.state_dict(), ema=ema.model.state_dict(),
                             tau=float(tau.detach()), opt=opt.state_dict(), sched=sched.state_dict(), step=step,
-                            rng=rng_state(), epoch=loader.batch_sampler.epoch, config=cfg.to_dict(),
+                            rng=rng_state(), epoch=getattr(loader.batch_sampler, "epoch", 0), config=cfg.to_dict(),
                             num_speakers=ds.num_speakers)
             save_checkpoint(work / "model_ema.pt", ema=ema.model.state_dict(), config=cfg.to_dict(),
                             num_speakers=ds.num_speakers, step=step, tau=float(tau.detach()), n_mels=ds.dim,

@@ -8,7 +8,11 @@ Output layout (``--out``)::
     index.jsonl    one line per utterance: offset, frames, text, norm_text, speaker, spk_id, split, ...
                    (split: train / val (reported results) / dev (tuning, with --dev-size))
     speakers.json  speaker name -> integer id
-    stats.json     global log-mel mean / std (scalar and per bin)
+    stats.json     global log-mel mean / std (scalar and per bin), the backend and the text ``language``
+
+``--parquet-glob`` also takes Hub paths (``hf://datasets/<repo>/data/train-0000*.parquet``), read without a local
+copy; ``--val-glob`` names held-out files whose rows form the val split (the rest of them: dev), e.g. shards of a large
+multi-speaker corpus past the ones used for training.
 """
 
 from __future__ import annotations
@@ -27,10 +31,10 @@ import torch
 from tqdm import tqdm
 
 from .audio import BACKENDS, N_MELS, extract_f0, make_logmel, prepare_waveform
-from .text import normalize
+from .text import LANGUAGES, frontend
 
 META_COLUMNS = ["text", "speaker", "quality_score"]  # optional except text; a missing speaker column is one speaker
-_MEL = None
+_MEL, _NORMALIZE = None, None
 
 
 def add_args(p: argparse.ArgumentParser) -> None:
@@ -51,16 +55,21 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--speaker-name", default=None,
                    help="one speaker name for every row (single-voice data whose speaker column means something else)")
     p.add_argument("--val-max-seconds", type=float, default=12.0, help="longest utterance eligible for val / dev")
+    p.add_argument("--language", choices=LANGUAGES, default="tr", help="text frontend (normalisation, symbols)")
+    p.add_argument("--speaker-column", default="speaker", help="the column naming each row's speaker")
+    p.add_argument("--val-glob", default=None,
+                   help="held-out parquet files: their rows are the val split (up to --val-size), the rest dev")
 
 
-def _init_worker(backend: str = "vocos") -> None:
-    global _MEL
+def _init_worker(backend: str = "vocos", language: str = "tr") -> None:
+    global _MEL, _NORMALIZE
     torch.set_num_threads(1)
     _MEL = make_logmel(backend)
+    _NORMALIZE = frontend(language).normalize
 
 
 def _process(row: dict) -> dict | None:
-    norm_text = normalize(row["text"] or "")
+    norm_text = _NORMALIZE(row["text"] or "")
     if len(norm_text) < 2:
         return None
     try:
@@ -72,6 +81,8 @@ def _process(row: dict) -> dict | None:
         return {"error": "non-finite mel"}
     meta = {k: row.get(k) for k in META_COLUMNS}
     meta["speaker"] = meta["speaker"] or "speaker"  # no speaker column: one speaker
+    if row.get("held_out"):
+        meta["held_out"] = True
     meta.update(norm_text=norm_text, frames=int(mel.shape[0]), audio_seconds=round(len(wav) / 24_000, 3))
     res = {"meta": meta, "mel": mel.astype(np.float16), "sum": mel.sum(0, dtype=np.float64),
            "sumsq": (mel.astype(np.float64) ** 2).sum(0)}
@@ -84,17 +95,31 @@ def _process(row: dict) -> dict | None:
     return res
 
 
+def _open(f: str):
+    """A local path, or a Hub file (``hf://...``) opened for reading without a local copy."""
+    if f.startswith("hf://"):
+        from huggingface_hub import HfFileSystem
+
+        return HfFileSystem().open(f, "rb", block_size=64 * 2**20)
+    return f
+
+
 def _iter_rows(files: list[str], trim: bool, limit: int, f0: bool = False, save_audio: bool = False,
-               f0_method: str = "dio", backend: str = "vocos", speaker_name: str | None = None):
+               f0_method: str = "dio", backend: str = "vocos", speaker_name: str | None = None,
+               speaker_column: str = "speaker", held_out: frozenset[str] = frozenset()):
     n = 0
+    columns = [speaker_column if c == "speaker" else c for c in META_COLUMNS]
     for f in files:
-        pf = pq.ParquetFile(f)
-        present = [c for c in META_COLUMNS if c in pf.schema_arrow.names]  # other datasets lack some metadata
+        pf = pq.ParquetFile(_open(f))
+        present = [c for c in columns if c in pf.schema_arrow.names]  # other datasets lack some metadata
         for rg in range(pf.num_row_groups):
             cols = pf.read_row_group(rg, columns=["audio", *present]).to_pylist()
             for row in cols:
+                if speaker_column != "speaker" and speaker_column in row:
+                    row["speaker"] = row.pop(speaker_column)
                 if speaker_name is not None:
                     row["speaker"] = speaker_name
+                row["held_out"] = f in held_out
                 row["trim"] = trim
                 row["f0"] = f0
                 row["f0_method"], row["backend"] = f0_method, backend
@@ -105,9 +130,17 @@ def _iter_rows(files: list[str], trim: bool, limit: int, f0: bool = False, save_
                     return
 
 
+def _glob(pattern: str) -> list[str]:
+    if pattern.startswith("hf://"):
+        from huggingface_hub import HfFileSystem
+
+        return sorted(f"hf://{f}" for f in HfFileSystem().glob(pattern))
+    return sorted(glob.glob(pattern))
+
+
 def _resolve_files(args) -> list[str]:
     if args.parquet_glob:
-        files = sorted(glob.glob(args.parquet_glob))
+        files = _glob(args.parquet_glob)
     else:
         from huggingface_hub import snapshot_download
 
@@ -136,7 +169,11 @@ def run(args) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     files = _resolve_files(args)
-    total = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
+    held_out = frozenset(_glob(args.val_glob)) if args.val_glob else frozenset()
+    if args.val_glob and not held_out:
+        raise FileNotFoundError(f"no parquet files match --val-glob {args.val_glob}")
+    files = [f for f in files if f not in held_out] + sorted(held_out)
+    total = sum(pq.ParquetFile(_open(f)).metadata.num_rows for f in files)
     if args.limit:
         total = min(total, args.limit)
 
@@ -149,10 +186,11 @@ def run(args) -> None:
     f0_file = open(out / "f0.bin", "wb") if args.f0 else None
     audio_file = open(out / "audio.bin", "wb") if args.save_audio else None
     audio_offset = 0
-    pool_args = dict(initializer=_init_worker, initargs=(args.backend,))
+    pool_args = dict(initializer=_init_worker, initargs=(args.backend, args.language))
     with open(out / "mels.bin", "wb") as fbin, Pool(args.workers, **pool_args) as pool:
         rows = _iter_rows(files, trim=not args.no_trim, limit=args.limit, f0=args.f0, save_audio=args.save_audio,
-                          f0_method=args.f0_method, backend=args.backend, speaker_name=args.speaker_name)
+                          f0_method=args.f0_method, backend=args.backend, speaker_name=args.speaker_name,
+                          speaker_column=args.speaker_column, held_out=held_out)
         for res in tqdm(pool.imap(_process, rows, chunksize=4), total=total, desc="prepare"):
             if res is None:
                 skipped += 1
@@ -177,9 +215,16 @@ def run(args) -> None:
             ss += res["sumsq"]
 
     speakers = {name: i for i, name in enumerate(sorted({e["speaker"] for e in index}))}
-    val = choose_validation(index, args.val_size, args.seed, max_seconds=args.val_max_seconds)
-    dev = choose_validation(index, args.dev_size, args.seed + 1, exclude=val, max_seconds=args.val_max_seconds)
+    if held_out:  # val from the held-out files' rows, the rest of them dev; nothing else is held out
+        rows = [i for i, e in enumerate(index) if e.get("held_out")]
+        pool = [i for i in rows if 2.0 <= index[i]["audio_seconds"] <= args.val_max_seconds]
+        val = set(random.Random(args.seed).sample(pool, min(args.val_size, len(pool))))
+        dev = set(rows) - val
+    else:
+        val = choose_validation(index, args.val_size, args.seed, max_seconds=args.val_max_seconds)
+        dev = choose_validation(index, args.dev_size, args.seed + 1, exclude=val, max_seconds=args.val_max_seconds)
     for i, e in enumerate(index):
+        e.pop("held_out", None)
         e["spk_id"] = speakers[e["speaker"]]
         e["split"] = "val" if i in val else "dev" if i in dev else "train"
     with open(out / "index.jsonl", "w") as f:
@@ -191,7 +236,7 @@ def run(args) -> None:
     std_bin = np.sqrt(np.maximum(ss / offset - mean_bin**2, 1e-8))
     mean = float(s.sum() / (offset * N_MELS))
     std = float(np.sqrt(ss.sum() / (offset * N_MELS) - mean**2))
-    stats = {"backend": args.backend, "mean": mean, "std": std,
+    stats = {"backend": args.backend, "language": args.language, "mean": mean, "std": std,
              "mean_bin": mean_bin.tolist(), "std_bin": std_bin.tolist(),
              "frames": int(offset), "utterances": len(index), "speakers": len(speakers),
              "errors": errors, "skipped": skipped}
