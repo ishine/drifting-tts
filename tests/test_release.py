@@ -182,6 +182,14 @@ def test_publish_exports_and_scan(tmp_path):
     torch.save(clean, tmp_path / "clean.pt")
     assert scan(tmp_path / "clean.pt", terms) == {"paths": 0, "names": 0}
     assert "ema" in pickle_strings(tmp_path / "clean.pt")
+    from drifting_tts.train import load_tts
+
+    half = export_tts(raw, half=True)  # fp16 weights, loaded back into the fp32 model
+    assert all(v.dtype == torch.float16 for v in half["ema"].values() if v.is_floating_point())
+    torch.save(half, tmp_path / "half.pt")
+    full, small = load_tts(tmp_path / "clean.pt")[0], load_tts(tmp_path / "half.pt")[0]
+    for (k, a), b in zip(full.state_dict().items(), small.state_dict().values()):
+        assert b.dtype == a.dtype and torch.allclose(a, b.float(), rtol=1e-3, atol=1e-4), k
     with pytest.raises(ValueError, match="Hub repo id"):
         export_vocos({"vocos": {}, "init": "/workspace/runs/vocos.yaml"})
     v = export_vocos({"vocos": {"w": torch.ones(2)}, "init": "charactr/vocos-mel-24khz", "mel": "bigvgan",

@@ -90,7 +90,8 @@ snapshots apart:
 | **200k** (the model in the test Space) | 1.42% | 0.64% | **2.930** | **0.803** |
 | copy-synthesis | 1.57% | 0.73% | 2.907 | – |
 
-180k and 200k differ by 5 words; 200k is ahead on similarity and UTMOSv2.
+180k and 200k differ by 5 words; 200k is ahead on similarity and UTMOSv2. The test Space holds the 200k weights in fp16 (`export_tts(half=True)`: 356
+MB, a Space stores at most 1 GB): on val 100 the same WER / CER as fp32 (2.23% / 0.90%), UTMOSv2 3.002 against 2.994.
 
 - **As intelligible as the recordings from 40k steps on**, with the vocoder they go through, and slightly more on
   all 500 utterances (1.42% against 1.57%: the source's own slips are not learned); the 100 utterances hold ~1,500

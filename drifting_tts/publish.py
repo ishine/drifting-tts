@@ -54,12 +54,16 @@ def _clean_config(node, key: str = ""):
     return node
 
 
-def export_tts(ck: dict) -> dict:
+def export_tts(ck: dict, half: bool = False) -> dict:
     """An exported acoustic model (``model_ema.pt``) -> what ``load_tts`` reads, the config's paths made generic
     (``data.root``, ``mae.path``, any absolute path) and training-only state (optimiser, ``taus``, discriminators)
-    dropped. Speaker names are not part of a checkpoint (``speakers.json`` lives in the data root)."""
+    dropped. Speaker names are not part of a checkpoint (``speakers.json`` lives in the data root). ``half``: the
+    weights stored in fp16, half the file (a Space's 1 GB storage); ``load_tts`` loads them into the fp32 model (the
+    English model: the same WER / CER on val 100, docs/ENGLISH.md)."""
     out = {k: ck[k] for k in TTS_KEYS if k in ck}
     out["ema"] = _tensors_to_cpu(out["ema"])
+    if half:
+        out["ema"] = {k: v.half() if v.is_floating_point() else v for k, v in out["ema"].items()}
     cfg = _clean_config(dict(out["config"]))
     if "data" in cfg:
         cfg["data"] = {**cfg["data"], "root": GENERIC_DATA_ROOT}
