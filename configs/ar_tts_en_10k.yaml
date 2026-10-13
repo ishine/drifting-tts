@@ -1,0 +1,32 @@
+# ARDrift in English on ~10,000 h: VoiceHub/echo-clones-10kh-en (synthetic, 4,000 speakers), streamed from its
+# parquet shards (drifting_tts/stream.py: ~675 GB as log-mels, more than the disk). The prepared pilot data
+# (configs/ar_tts_en.yaml) gives the mel statistics, the speaker table and the val split (a held-out source shard that
+# is not in the 10,000 h). A larger backbone and text encoder than the pilot's (36 M + 121 M + 20 M head), for 100x
+# the data.
+base: ar_tts_en.yaml
+
+data:
+  root: data/en_pilot
+  stream:
+    files: hf://datasets/VoiceHub/echo-clones-10kh-en/data/*.parquet
+    speaker_column: speaker_id
+    workers: 12
+    cache: /workspace/stream_cache
+
+model:
+  text:
+    d: 384
+    heads: 6
+    layers: 8
+    ffn: 1536
+  ar:
+    dim: 768
+    depth: 16
+    heads: 12
+
+train:
+  batch_size: 48           # many short utterances in this corpus (median 5.6 s against the pilot's 8.3 s): with 24
+                           # per batch, batches held half of the 24,000-frame budget
+  steps: 200000           # 5.1 it/s on an RTX 5090 (22 GB): ~11 h, about one pass over the 10,000 h
+  sample_every: 20000
+  save_every: 20000
