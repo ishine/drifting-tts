@@ -7,6 +7,7 @@ name            input rate  output rate  frame rate    dim    weights
 ``dacvae``      48 kHz      48 kHz       25 Hz         128    ``facebook/dacvae-watermarked`` (``[dacvae]``)
 ``voxcpm2``     16 kHz      48 kHz       25 Hz         64     ``openbmb/VoxCPM2`` AudioVAE (``[voxcpm]``)
 ``voxcpm1.5``   44.1 kHz    44.1 kHz     25 Hz         64     ``openbmb/VoxCPM1.5`` AudioVAE (``[voxcpm]``)
+``mimi``        24 kHz      24 kHz       12.5 Hz       32     Kyutai's Pocket TTS Mimi (``[mimi]``, gated weights)
 ==============  ==========  ===========  ============  =====  ==================================================
 """
 
@@ -14,8 +15,8 @@ from __future__ import annotations
 
 from .base import AudioBackend, LatentStats, resample, stream_decode
 
-BACKENDS = ("bigvgan", "dacvae", "voxcpm2", "voxcpm1.5")
-VAE_BACKENDS = ("dacvae", "voxcpm2", "voxcpm1.5")  # the TTS model can be trained on these (`extract-latents`)
+BACKENDS = ("bigvgan", "dacvae", "voxcpm2", "voxcpm1.5", "mimi")
+VAE_BACKENDS = ("dacvae", "voxcpm2", "voxcpm1.5", "mimi")  # the TTS model can be trained on these (`extract-latents`)
 
 __all__ = ["BACKENDS", "VAE_BACKENDS", "AudioBackend", "LatentStats", "load_backend", "resample", "stream_decode"]
 
@@ -35,4 +36,8 @@ def load_backend(name: str, device: str = "cuda", **kwargs) -> AudioBackend:
         from .voxcpm import VoxCPMBackend
 
         return VoxCPMBackend(name, device, **kwargs)
+    if name == "mimi":
+        from .mimi import MimiBackend
+
+        return MimiBackend(device, **kwargs)
     raise ValueError(f"unknown audio backend {name!r}; choose from {', '.join(BACKENDS)}")

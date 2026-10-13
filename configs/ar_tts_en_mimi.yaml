@@ -1,0 +1,22 @@
+# ARDrift in English on Kyutai's Mimi latents (drifting_tts/latents/mimi.py; docs/MIMI.md): the 10,000 h of
+# VoiceHub/echo-clones-10kh-en encoded to 32-d continuous latents at 12.5 Hz, the codec of Kyutai's Pocket TTS, instead
+# of 100-band log-mels for Vocos v2. Every latent frame is stored 4 times (50 Hz, for character alignment) and one
+# patch of 4 is one AR step: one Mimi frame (80 ms) per step, 12.5 steps per second of speech, as in Pocket TTS.
+#   drifting-tts extract-latents --parquet-glob "hf://datasets/VoiceHub/echo-clones-10kh-en/data/*.parquet" \
+#       --val-glob "hf://datasets/SynDataLab-EN/echo-clones-4m-en/data/train-07960.parquet" --backend mimi \
+#       --language en --speaker-column speaker_id --out data/en_mimi --tf32
+# The model is the 10k-h mel run's (configs/ar_tts_en_10k.yaml), so the two compare the audio space only.
+base: ar_tts_en_10k.yaml
+
+data:
+  root: data/en_mimi
+  stream: null             # the latents fit on the disk (~115 GB)
+  max_frames: 1000         # <= 20 s at 50 Hz
+
+drift:
+  detail: false            # harmonic detail is a log-mel feature (frequency envelope); latents have no frequency axis
+
+train:
+  steps: 150000            # ~480 s of speech per batch at 50 Hz: about 2 passes over the 10,000 h
+  sample_every: 10000
+  save_every: 10000
