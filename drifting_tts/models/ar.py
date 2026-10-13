@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from ..alignment import sequence_mask
-from ..text import SYMBOLS
+from ..text import frontend
 from .generator import RMSNorm, SwiGLU
 from .text_encoder import TextEncoder, durations_to_alignment, expand, frames_to_alignment, rope
 
@@ -145,7 +145,8 @@ class ARDriftTTS(nn.Module):
     def __init__(self, cfg, num_speakers: int, n_mels: int = 100):
         super().__init__()
         t, a = cfg.text, cfg.ar
-        self.encoder = TextEncoder(len(SYMBOLS), n_mels=n_mels, d=t.d, heads=t.heads, layers=t.layers, ffn=t.ffn,
+        vocab = len(frontend(t.get("language")).SYMBOLS)  # model.text.language: the frontend (default Turkish)
+        self.encoder = TextEncoder(vocab, n_mels=n_mels, d=t.d, heads=t.heads, layers=t.layers, ffn=t.ffn,
                                    dropout=t.dropout, num_speakers=num_speakers, spk_dim=t.spk_dim)
         self.n_mels, self.patch, self.lookahead = n_mels, int(a.patch), int(a.get("lookahead", 2))
         self.pitch_enabled = False  # the intonation is the autoregressive model's own

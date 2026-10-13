@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from .audio import FRAME_RATE, N_MELS
-from .text import PAD_ID, text_to_ids
+from .text import PAD_ID, frontend
 
 SCORE_ALIASES = {"mos": "mos_ovrl", "rate": "cps", "bandwidth": "bw_hz"}
 
@@ -123,6 +123,7 @@ class MelDataset(Dataset):
         self.stats = MelStats.load(root)
         st = json.loads((root / "stats.json").read_text())
         self.backend = st.get("backend", "vocos")
+        self.language = st.get("language", "tr")  # the text frontend of norm_text (prepare --language)
         # features per frame and frames per second: 100 log-mel bins at 93.75 Hz, or VAE latents (extract-latents)
         self.dim, self.frame_rate = int(st.get("dim", N_MELS)), float(st.get("frame_rate", FRAME_RATE))
         self.latent_repeat = int(st.get("latent_repeat", 1))  # extract-latents: copies of every VAE frame
@@ -191,7 +192,8 @@ class MelDataset(Dataset):
         e = self.items[i]
         mel = torch.from_numpy(np.array(self.mels[e["offset"]: e["offset"] + e["frames"]], dtype=np.float32))
         item = {
-            "text": torch.tensor(text_to_ids(e["norm_text"], normalized=True), dtype=torch.long),
+            "text": torch.tensor(frontend(self.language).text_to_ids(e["norm_text"], normalized=True),
+                                 dtype=torch.long),
             "mel": self.stats.normalize(mel.T.contiguous()),
             "spk": e["spk_id"],
             "index": i,

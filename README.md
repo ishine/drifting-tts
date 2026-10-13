@@ -44,6 +44,11 @@ on Freya-TR-Eval it is more intelligible than v3.2 for every voice (studio 0.84%
 the same UTMOSv2, and its intonation is the closest to the recordings measured here; first audio after 36 ms
 ([docs/AR_DRIFT.md](docs/AR_DRIFT.md)). Not released yet.
 
+**Experimental, English:** ARDrift trained from scratch on 10,000 h of synthetic English speech
+([VoiceHub/echo-clones-10kh-en](https://huggingface.co/datasets/VoiceHub/echo-clones-10kh-en), 4,000 speakers),
+streamed from the Hub while training, with an English character frontend: WER 1.42% on 500 held-out sentences, as
+intelligible as the recordings through the same vocoder (1.57%), UTMOSv2 2.93 ([docs/ENGLISH.md](docs/ENGLISH.md)).
+
 **Experimental:** the same model trained in the latent space of an audio VAE, with the VAE decoder fine-tuned on
 its latents: [DAC-VAE](https://huggingface.co/Vyvo/drifting-tts-tr-dacvae) (WER 1.32%, UTMOSv2 2.71) and
 [VoxCPM2](https://huggingface.co/Vyvo/drifting-tts-tr-voxcpm2) (1.87%, 2.53), against 0.66% and 2.93 for v3.1 on the
@@ -259,6 +264,7 @@ be added later by fine-tuning ([docs/TRAINING.md](docs/TRAINING.md#adding-a-voic
 | [docs/PROSODY.md](docs/PROSODY.md) | prosody metrics against recordings (`drifting-tts prosody`), oracle prosody, pitch gain, pause policy |
 | [docs/PROSODY_MODEL.md](docs/PROSODY_MODEL.md) | the stochastic prosody predictor of v3.2 (drifting), against regression and flow matching |
 | [docs/AR_DRIFT.md](docs/AR_DRIFT.md) | ARDrift, our own autoregressive model with a one-step drifting head (#42): design, training on Vyvo/tr-dataset-12, results against v3.2 |
+| [docs/ENGLISH.md](docs/ENGLISH.md) | ARDrift in English: the character frontend, training streamed from 10,000 h on the Hub, results |
 | [docs/LATENTS.md](docs/LATENTS.md) | audio-VAE latent spaces (DAC-VAE, VoxCPM): the backends, their resynthesis ceiling, the latent TTS pilots and the VoxCPM2 and DAC-VAE decoder GTA fine-tunes |
 | [docs/POCKET_TTS_GATE.md](docs/POCKET_TTS_GATE.md) | a Turkish Pocket TTS (autoregressive, Mimi latents) on Freya-100 with our judges and prosody metrics, and the Mimi codec gate (#42) |
 | [space/](space/) | the Gradio demo (`scripts/deploy_space.sh` deploys it) |

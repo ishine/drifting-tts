@@ -1,0 +1,22 @@
+# ARDrift in English (docs/AR_DRIFT.md): the same recipe as configs/ar_tts.yaml with the English character frontend
+# (drifting_tts/text_en.py) and a wider text encoder, since English spelling is far from phonemic and the encoder
+# learns the letters' sounds itself. Pilot data: ~93 h of SynDataLab-EN/echo-clones-4m-en (synthetic, 4,000 speakers;
+# mirrored as VoiceHub/echo-clones-10kh-en), the val split from a held-out shard:
+#   drifting-tts prepare --parquet-glob "hf://datasets/SynDataLab-EN/echo-clones-4m-en/data/train-000[0-6][0-9].parquet" \
+#       --val-glob "hf://datasets/SynDataLab-EN/echo-clones-4m-en/data/train-07960.parquet" --val-size 200 \
+#       --out data/en_pilot --backend bigvgan --language en --speaker-column speaker_id --workers 24
+base: ar_tts.yaml
+
+data:
+  root: data/en_pilot
+  # no scores.jsonl (synthetic speech): the base's DNSMOS / CER filters do not apply
+
+model:
+  text:
+    language: en
+    d: 256
+    heads: 4
+    ffn: 1024
+
+train:
+  steps: 30000

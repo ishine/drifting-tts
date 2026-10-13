@@ -38,7 +38,7 @@ from .data import MelDataset, collate
 from .judges import SV_MODELS, Judges
 from .metrics import SpectralComparison, bootstrap_ci, error_counts, mel_center_freqs
 from .synthesize import add_vocoder_args
-from .text import normalize
+from .text import frontend
 
 
 def add_args(p: argparse.ArgumentParser) -> None:
@@ -56,6 +56,7 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--harmonic", action="store_true",
                    help="only spectral statistics under the ground-truth alignment (no vocoder, no judges)")
     p.add_argument("--asr", default="large-v3", help="faster-whisper model (large-v3-turbo: faster); 'none' disables")
+    p.add_argument("--asr-device", default=None, help="device of the ASR judge (default: --device)")
     p.add_argument("--sv", default="wavlm-large-ecapa",
                    help=f"speaker-verification model: {', '.join(SV_MODELS)}; 'none' disables")
     p.add_argument("--mos", default="utmosv2", choices=["utmosv2", "utmos22", "none"], help="naturalness predictor")
@@ -68,9 +69,9 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _plain(text: str) -> str:
+def _plain(text: str, language: str = "tr") -> str:
     """Normalised text without punctuation: what CER / WER compare."""
-    return re.sub(r"\s+", " ", re.sub(r"[.,!?]", " ", normalize(text))).strip()
+    return re.sub(r"\s+", " ", re.sub(r"[.,!?]", " ", frontend(language).normalize(text))).strip()
 
 
 def to16k(wav: torch.Tensor) -> np.ndarray:
@@ -85,7 +86,7 @@ def score_utterance(judges: Judges, wav: torch.Tensor, ref: str,
     w16 = to16k(wav)
     row: dict = {"ref": ref}
     if judges.asr is not None:
-        row["hyp"] = _plain(judges.asr(w16))
+        row["hyp"] = _plain(judges.asr(w16), getattr(judges.asr, "language", "tr"))
         row.update(error_counts(ref, row["hyp"]))
     emb = judges.sv(w16) if judges.sv is not None else None
     if emb is not None and spk_ref is not None:
@@ -156,8 +157,9 @@ def run(args) -> None:
     with_audio = (root / "audio.bin").exists() and not args.no_gt
     ds = MelDataset(root, args.split, min_frames=1, max_frames=10**9, with_audio=with_audio)
     idx = select(ds, args.split, args.offset, args.num)
-    judges = load_judges(args.asr, args.sv, args.mos, args.device, args.mos_repetitions)
-    refs = [_plain(ds.items[i]["norm_text"]) for i in idx]
+    judges = load_judges(args.asr, args.sv, args.mos, args.device, args.mos_repetitions, language=ds.language,
+                         asr_device=args.asr_device)
+    refs = [_plain(ds.items[i]["norm_text"], ds.language) for i in idx]
     spk_refs: list[torch.Tensor | None] = [None] * len(idx)
     (out / "wav").mkdir(exist_ok=True)
 
