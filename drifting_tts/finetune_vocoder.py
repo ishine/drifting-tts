@@ -543,6 +543,16 @@ def latent_windows(latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.
     return z, (starts - lefts).to(latents.device), y
 
 
+def add_latent_noise(latents: torch.Tensor, max_std: float, repeat: int) -> torch.Tensor:
+    """Normalised latents ``[B, dim, T]`` (every VAE frame repeated ``repeat`` times) plus Gaussian noise whose std is
+    drawn from ``U(0, max_std)`` per utterance; one draw per VAE frame, shared by its repeats (``train.latent_noise``).
+    """
+    b, d, t = latents.shape
+    std = torch.rand(b, 1, 1, device=latents.device) * max_std
+    noise = torch.randn(b, d, -(-t // repeat), device=latents.device).repeat_interleave(repeat, -1)[..., :t]
+    return latents + std * noise
+
+
 def discriminator_hparams(repo: str, overrides: dict | None = None) -> dict:
     """``config.json`` of a BigVGAN repo (the discriminators' hyperparameters), with ``overrides``."""
     import json
@@ -572,6 +582,11 @@ class VAEDecoderGAN(BigVGANGAN):
       gets no training signal; the TTS pipeline never outputs it.
     * Weight norm: re-applied to every trainable convolution for training, as the VAE was trained
       (``vocoder.weight_norm``), and folded back on export.
+    * Distillation (``train.teacher``): the target is not the recording but the released decoder (a frozen copy) on
+      the recording's own latents, so the loss on recorded latents starts at zero. With ``train.latent_noise``,
+      recorded-latent batches get Gaussian noise (:func:`add_latent_noise`). With ``adv_loss_coeff`` and
+      ``fm_loss_coeff`` 0 (no discriminator) the decoder learns to decode generated and noisy latents as the released
+      one decodes the clean ones, and keeps its clean-latent decoding (docs/MIMI.md).
     """
 
     export_name = "decoder_ft.pt"
@@ -585,9 +600,11 @@ class VAEDecoderGAN(BigVGANGAN):
         self.cfg, vc, tc = cfg, cfg.vocoder, cfg.train
         self.repo = vc.get("repo", BIGVGAN_REPO)
         self.backend, self.repeat = backend, repeat
-        self.be = load_backend(backend, device, **({"target_rate": vc.target_rate} if vc.get("target_rate") else {}))
+        kw = {"target_rate": vc.target_rate} if vc.get("target_rate") else {}
+        self.be = load_backend(backend, device, **kw)
         self.target_rate = int(getattr(self.be, "target_rate", None) or self.be.output_rate)
         self.gen = self.be.trainable_decoder().train()
+        self.teacher = load_backend(backend, device, **kw) if tc.get("teacher", False) else None  # released decoder
         # the frozen part of the decoder (DAC-VAE: the watermark), as released: every export checks it is unchanged
         self.frozen = {k: v.detach().cpu().clone() for k, v in self.gen.named_parameters() if not v.requires_grad}
         self.weight_norm = vc.get("weight_norm", True)
@@ -628,19 +645,30 @@ class VAEDecoderGAN(BigVGANGAN):
         if released:
             print(f"weight norm: {n} convolutions start from the released magnitudes and directions", flush=True)
 
-    def segments(self, latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.Tensor):
+    def segments(self, latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.Tensor,
+                 clean: torch.Tensor | None = None):
+        """``clean`` (``train.teacher``): the recording's latents, decoded by the released decoder in the same
+        windows as the target in place of the recording."""
+        if clean is not None:
+            latents = torch.cat([latents, clean], 1)
         z, offsets, y = latent_windows(latents, audio, frame_len, self.repeat, self.segment, self.context, self.hop,
                                        self.right, pad=self.be.causal)
+        if clean is not None:
+            z, z_clean = z.chunk(2, 1)
+            with torch.no_grad():
+                y = self._decode(self.teacher, z_clean, offsets)
         return (z, offsets), y
 
     def audio_samples(self, frames: int) -> int:
         return frames // self.repeat * self.hop
 
-    def forward(self, x) -> torch.Tensor:
-        z, offsets = x
-        wav = self.resample(self.be.decode_train(z.float()))  # [B, window * hop] at 24 kHz
+    def _decode(self, be, z: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+        wav = self.resample(be.decode_train(z.float()))  # [B, window * hop] at 24 kHz
         idx = offsets[:, None] * self.hop + torch.arange(self.segment * self.hop, device=wav.device)
-        return wav.gather(1, idx)[:, None]
+        return wav.gather(1, idx)
+
+    def forward(self, x) -> torch.Tensor:
+        return self._decode(self.be, *x)[:, None]
 
     @torch.no_grad()
     def generate(self, latents: torch.Tensor) -> torch.Tensor:
@@ -875,6 +903,8 @@ def run(args) -> None:
     if vae and arch not in ("vae_decoder", backend):
         raise ValueError(f"a TTS model trained on {backend} latents fine-tunes its VAE decoder "
                          f"(vocoder.arch: vae_decoder), not a {arch} vocoder")
+    if not vae and (tc.get("teacher", False) or tc.get("latent_noise", 0) > 0):
+        raise ValueError("train.teacher and train.latent_noise are for a VAE decoder (vocoder.arch: vae_decoder)")
     if not vae and arch == "vae_decoder":
         raise ValueError(f"vocoder.arch: vae_decoder needs a TTS model trained on VAE latents, not {backend} mels")
     if arch == "bigvgan" and backend != "bigvgan":
@@ -923,8 +953,11 @@ def run(args) -> None:
         use_gta = torch.rand(()) < tc.gta_prob
         mel = gta_mels(tts, batch, tc.gta_temperature, device, cfg_scale=tc.get("gta_cfg", 1.0)) if use_gta \
             else batch["mel"].to(device)
+        if not use_gta and tc.get("latent_noise", 0) > 0:
+            mel = add_latent_noise(mel, tc.latent_noise, gan.repeat)
         mel = mel_stats.denormalize(mel)  # back to log-mels / latents, the vocoder's input
-        x, audio = gan.segments(mel, batch["audio"].to(device), batch["mel_len"])
+        teacher = {"clean": mel_stats.denormalize(batch["mel"].to(device))} if tc.get("teacher", False) else {}
+        x, audio = gan.segments(mel, batch["audio"].to(device), batch["mel_len"], **teacher)
         # fixed segment shapes: faster convolutions (GAN; the drift trainer opts out, see DriftVocoder)
         with torch.backends.cudnn.flags(enabled=True, benchmark=getattr(gan, "cudnn_benchmark", True)):
             gan.batch_is_gta = bool(use_gta)

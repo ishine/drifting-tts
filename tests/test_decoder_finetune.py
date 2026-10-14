@@ -242,3 +242,27 @@ def test_finetune_decoder_of_an_ar_model_cpu(tiny_backend, latent_root, tmp_path
     assert wav.numel() > 0 and torch.isfinite(wav).all()
     with pytest.raises(ValueError, match="without guidance"):
         main([a if a != "train.gta_cfg=1.0" else "train.gta_cfg=2.0" for a in args] + ["train.steps=3"])
+    # distillation without discriminators: noisy recorded latents and GTA latents against the released decoder
+    distill = [a.replace(str(work), str(tmp_path / "distill")) for a in args]
+    main(distill + ["train.gta_prob=0.5", "train.teacher=true", "train.latent_noise=0.3", "train.adv_loss_coeff=0",
+                    "train.fm_loss_coeff=0"])
+    assert load_decoder_checkpoint(tmp_path / "distill" / "decoder_ft.pt")["step"] == 2
+
+
+def test_teacher_target_is_the_released_decoder(tiny_backend):
+    """``train.teacher``: the target is the released decoder on the clean latents in the same window, so the
+    untouched decoder has zero loss on clean latents; noise (``add_latent_noise``) is one draw per VAE frame."""
+    pytest.importorskip("nnAudio")
+    gan = fv.VAEDecoderGAN(_cfg("train.teacher=true", "vocoder.weight_norm=false"), "cpu", "voxcpm2", 4)
+    torch.manual_seed(1)
+    frames = torch.randn(2, 6, 20).repeat_interleave(4, -1)
+    audio = torch.zeros(2, 20 * 960)
+    x, y = gan.segments(frames, audio, torch.tensor([80, 80]), clean=frames)
+    with torch.no_grad():
+        assert torch.allclose(gan.forward(x)[:, 0], y, atol=1e-6) and y.abs().max() > 0
+    noisy = fv.add_latent_noise(frames, 0.5, 4)
+    d = (noisy - frames).view(2, 6, 20, 4)
+    assert (d == d[..., :1]).all() and d.abs().max() > 0
+    x, y2 = gan.segments(noisy, audio, torch.tensor([80, 80]), clean=frames)
+    with torch.no_grad():
+        assert not torch.allclose(gan.forward(x)[:, 0], y2, atol=1e-4)
