@@ -45,9 +45,13 @@ class MimiBackend(AudioBackend):
     dim = 32
     causal = True
 
-    def __init__(self, device: str = "cuda"):
+    def __init__(self, device: str = "cuda", decoder: dict | None = None):
+        """``decoder``: a fine-tuned decoder (``decoder_ft.pt`` of ``finetune-vocoder``, loaded with
+        :func:`drifting_tts.latents.vocoder.load_decoder_checkpoint`) in place of the released one."""
         self.device = device
         self.model = load_mimi(device)
+        if decoder is not None:
+            self.trainable_decoder().load_state_dict(decoder["decoder"])
 
     @torch.no_grad()
     def encode(self, wav: Tensor, sr: int) -> Tensor:
@@ -64,3 +68,22 @@ class MimiBackend(AudioBackend):
         state = init_states(self.model, batch_size=b, sequence_length=max(10000, 16 * t + 16))
         out = self.model.decode_from_latent(latent.transpose(1, 2), state)[:, 0]
         return out[:, : t * self.hop_out].clamp(-1, 1)
+
+    def trainable_decoder(self) -> torch.nn.Module:
+        """Everything between the latent and the waveform: the latent's projection, the 2x transposed-convolution
+        upsampler, the 2-layer transformer and the SEANet decoder (``finetune-vocoder``, ``decoder_ft.pt``)."""
+        m = self.model
+        return torch.nn.ModuleDict({"quantizer": m.quantizer, "upsample": m.upsample,
+                                    "decoder_transformer": m.decoder_transformer, "decoder": m.decoder})
+
+    def decode_train(self, latent: Tensor) -> Tensor:
+        """:meth:`decode` with gradients, unclamped: the convolutions start from fresh (zero) streaming states as in
+        :meth:`decode`; the transformer runs its stateless causal path (the same attention window as the KV cache)."""
+        from pocket_tts.modules.conv import StreamingConv1d, StreamingConvTranspose1d
+
+        m, (b, _, t) = self.model, latent.shape
+        state = {name: mod.init_state(b, 0) for name, mod in m.named_modules()
+                 if isinstance(mod, (StreamingConv1d, StreamingConvTranspose1d))}
+        x = m._to_encoder_framerate(m.quantizer(latent), state)
+        (x,) = m.decoder_transformer(x, None)
+        return m.decoder(x, state)[:, 0, : t * self.hop_out]

@@ -70,3 +70,30 @@ def test_mimi_backend_frames():
         z = be.encode(torch.randn(n) * 0.05, 24000)
         assert z.shape == (1, 32, be.num_frames(n, 24000))
         assert be.decode(z).shape == (1, z.shape[-1] * 1920)
+
+
+def test_mimi_decoder_training_path():
+    """decode_train (finetune-vocoder) is decode with gradients; a fine-tuned decoder state loads back."""
+    pytest.importorskip("pocket_tts")
+    from drifting_tts.latents import load_backend
+    from drifting_tts.latents.mimi import MimiBackend
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        be = load_backend("mimi", device)
+    except Exception as e:  # gated weights not accepted / offline
+        pytest.skip(f"Mimi weights unavailable: {e}")
+    torch.manual_seed(0)
+    z = be.encode(torch.randn(24000 * 2) * 0.05, 24000)
+    with torch.no_grad():
+        torch.testing.assert_close(be.decode_train(z).clamp(-1, 1), be.decode(z))
+    z.requires_grad_(True)
+    be.decode_train(z).pow(2).mean().backward()
+    assert z.grad.abs().sum() > 0
+    dec = be.trainable_decoder()
+    assert set(dict(dec.named_children())) == {"quantizer", "upsample", "decoder_transformer", "decoder"}
+    state = {k: v + 0.01 * torch.randn_like(v) for k, v in dec.state_dict().items()}
+    tuned = MimiBackend(device, decoder={"decoder": state, "backend": "mimi"})
+    for k, v in tuned.trainable_decoder().state_dict().items():
+        torch.testing.assert_close(v, state[k])
+    assert not torch.allclose(tuned.decode(z.detach()), be.decode(z.detach()), atol=1e-3)

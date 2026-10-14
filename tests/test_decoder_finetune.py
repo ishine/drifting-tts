@@ -67,6 +67,26 @@ def test_latent_windows_start_on_vae_frames():
         fv.latent_windows(frames, audio, torch.full((B,), 9 * repeat), repeat, seg, ctx, hop)
 
 
+def test_latent_windows_pad_short_utterances():
+    """A causal decoder (pad=True) also takes utterances shorter than the window: decoded from their start, the
+    padding after them (which the segment does not hear)."""
+    torch.manual_seed(0)
+    B, dim, repeat, hop, seg, ctx = 4, 3, 4, 960, 5, 8
+    native = torch.randn(B, dim, 9)
+    frames = native.repeat_interleave(repeat, -1)
+    frame_len = torch.tensor([9, 6, 8, 7]) * repeat  # all shorter than the window (8 + 5 + 1 = 14 frames)
+    audio = torch.arange(9 * hop).float().repeat(B, 1)
+    for _ in range(20):
+        z, offsets, y = fv.latent_windows(frames, audio, frame_len, repeat, seg, ctx, hop, pad=True)
+        assert z.shape == (B, dim, ctx + seg + 1) and y.shape == (B, seg * hop)
+        for i in range(B):
+            n, s = int(frame_len[i]) // repeat, int(y[i, 0]) // hop
+            assert y[i, 0] == s * hop and s + seg + 1 <= n and int(offsets[i]) == s  # from the utterance start
+            torch.testing.assert_close(z[i, :, :n], native[i, :, :n])
+    with pytest.raises(ValueError, match="shorter than a window"):
+        fv.latent_windows(frames, audio, torch.full((B,), 5 * repeat), repeat, seg, ctx, hop, pad=True)
+
+
 def test_windowed_decode_matches_whole_utterance(tiny_backend):
     """A segment decoded in its window (left context, cropped after resampling to 24 kHz) is the same audio as the
     whole utterance through LatentVocoder: exactly when the window starts at the utterance start, and within the
@@ -186,3 +206,39 @@ def test_finetune_voxcpm2_decoder_cpu(tiny_backend, latent_root, tmp_path):  # n
     assert w1.shape == w0.shape and torch.isfinite(w1).all() and not torch.allclose(w1, w0)
     with pytest.raises(ValueError, match="fine-tuned decoder checkpoint"):
         Synthesizer(tmp_path / "tts.pt", "cpu", vocoder="bigvgan-v2")
+
+
+def test_finetune_decoder_of_an_ar_model_cpu(tiny_backend, latent_root, tmp_path):  # noqa: F811
+    """ARDrift's GTA latents (one teacher-forced pass, ARDriftTTS.gta) train the decoder as the DiT's do; the
+    fine-tuned decoder then serves the AR model in the Synthesizer."""
+    pytest.importorskip("nnAudio")
+    from drifting_tts.cli import main
+    from drifting_tts.data import MelDataset
+    from drifting_tts.models.ar import ARDriftTTS
+    from drifting_tts.synthesize import Synthesizer
+    from drifting_tts.utils import save_checkpoint
+
+    root = latent_root / "lat"
+    ds = MelDataset(root, min_frames=1)
+    cfg = load_config("configs/ar_tts.yaml", [f"data.root={root}", "model.text.d=16", "model.text.layers=1",
+                                              "model.text.ffn=32", "model.text.spk_dim=8", "model.ar.dim=32",
+                                              "model.ar.depth=1", "model.ar.heads=2", "model.ar.head_dim=32",
+                                              "model.ar.head_depth=1"])
+    tts = ARDriftTTS(cfg.model, num_speakers=ds.num_speakers, n_mels=ds.dim)
+    stats = {**ds.stats.to_dict(), "backend": ds.backend, "latent_repeat": ds.latent_repeat}
+    save_checkpoint(tmp_path / "ar.pt", ema=tts.state_dict(), config=cfg.to_dict(), num_speakers=ds.num_speakers,
+                    stats=stats, n_mels=ds.dim)
+    work = tmp_path / "dec"
+    args = ["finetune-vocoder", "--config", "configs/vocoder_voxcpm2_decoder.yaml", "--workdir", str(work),
+            f"data.root={root}", f"tts.path={tmp_path / 'ar.pt'}", "vocoder.pretrained_discriminators=false",
+            "train.cpu=true", "train.batch_size=2", "train.num_workers=0", "train.log_every=1",
+            "train.save_every=2", "train.sample_every=2", "train.segment_frames=4", "train.context_frames=3",
+            "train.gta_prob=1.0", "train.gta_cfg=1.0", "train.steps=2"]
+    main(args)
+    path = work / "decoder_ft.pt"
+    assert load_decoder_checkpoint(path)["step"] == 2
+    tuned = Synthesizer(tmp_path / "ar.pt", "cpu", vocoder=str(path))
+    wav, _ = tuned("merhaba dünya.", speaker=0)
+    assert wav.numel() > 0 and torch.isfinite(wav).all()
+    with pytest.raises(ValueError, match="without guidance"):
+        main([a if a != "train.gta_cfg=1.0" else "train.gta_cfg=2.0" for a in args] + ["train.steps=3"])

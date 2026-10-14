@@ -71,6 +71,10 @@ def gta_mels(tts, batch: dict, temperature: float, device, cfg_scale: float = 1.
         pitch = token_pitch(batch["f0"].to(device), attn, lf0_mean, lf0_std) if "f0" in batch else None
         h, _ = tts.pitch_condition(h, x_mask, spk, pitch)
     cond = tts.frame_condition(h, mu, attn)
+    if hasattr(tts, "gta"):  # ARDrift: one teacher-forced pass (no guidance)
+        if cfg_scale != 1.0:
+            raise ValueError("GTA latents of an autoregressive model are drawn without guidance (gta_cfg: 1)")
+        return tts.gta(cond, y, spk, temperature, generator) * y_mask[:, None]
     z = torch.randn(y.shape[0], y.shape[1], y.shape[-1], device=device, generator=generator) * temperature
     alpha = torch.full((y.shape[0],), float(cfg_scale), device=device)
     steps = tts.generator.num_steps if steps is None else steps
@@ -506,7 +510,7 @@ class BigVGANGAN:
 
 
 def latent_windows(latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.Tensor, repeat: int, segment: int,
-                   context: int, hop: int, right: int = 1):
+                   context: int, hop: int, right: int = 1, pad: bool = False):
     """Random training windows for a VAE decoder, on VAE-frame boundaries.
 
     ``latents``: ``[B, dim, T]`` with every VAE frame repeated ``repeat`` times (``extract-latents``), ``frame_len``
@@ -517,6 +521,10 @@ def latent_windows(latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.
     then sees as it does when decoding a whole utterance. A causal decoder needs no right context: ``right = 1``
     serves the resampler. A non-causal decoder needs both sides.
 
+    ``pad`` (a causal decoder only): an utterance shorter than the window is decoded from its start, right-padded
+    to the window (the padding comes after the segment, which a causal decoder does not hear), so it only needs
+    ``segment + 1`` frames.
+
     Returns the windows ``[B, dim, width]`` (repeats averaged back, as ``LatentVocoder`` does), the offset of each
     segment in its window (``s - a`` VAE frames) and the target audio ``[B, segment * hop]`` (samples
     ``[s * hop, (s + segment) * hop)``)."""
@@ -524,10 +532,12 @@ def latent_windows(latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.
         latents = F.avg_pool1d(latents[..., : latents.shape[-1] // repeat * repeat], repeat)
     n = frame_len.cpu() // repeat
     width = context + segment + right
-    if (n < width).any():
+    if (n < (segment + 1 if pad else width)).any():
         raise ValueError(f"utterances of {int(n.min())} VAE frames are shorter than a window of {width}")
+    if pad:
+        latents = F.pad(latents, (0, max(0, width - latents.shape[-1])))
     starts = (torch.rand(len(n)) * (n - segment).float()).long()  # s in [0, n - segment - 1]
-    lefts = torch.minimum((starts - context).clamp_min(0), n - width)
+    lefts = torch.minimum((starts - context).clamp_min(0), (n - width).clamp_min(0))
     z = torch.stack([latents[i, :, a: a + width] for i, a in enumerate(lefts.tolist())])
     y = torch.stack([audio[i, s * hop: (s + segment) * hop] for i, s in enumerate(starts.tolist())])
     return z, (starts - lefts).to(latents.device), y
@@ -586,7 +596,8 @@ class VAEDecoderGAN(BigVGANGAN):
         self.hop = round(SAMPLE_RATE / self.be.frame_rate)  # 24 kHz samples per VAE frame (960 at 25 Hz)
         self.segment, self.context = tc.segment_frames, tc.get("context_frames", 0)
         self.right = 1 if self.be.causal else max(1, tc.get("right_context_frames", self.context))
-        self.min_frames = repeat * (self.context + self.segment + self.right)
+        # a causal decoder takes short utterances too, right-padded (latent_windows(pad=True))
+        self.min_frames = repeat * (self.segment + 1 if self.be.causal else self.context + self.segment + self.right)
         self.resample = torchaudio.transforms.Resample(self.be.output_rate, SAMPLE_RATE).to(device)
         self._setup(discriminator_hparams(self.repo, vc.get("hparams")), device)
         trained = sum(p.numel() for p in self.gen.parameters() if p.requires_grad)
@@ -619,7 +630,7 @@ class VAEDecoderGAN(BigVGANGAN):
 
     def segments(self, latents: torch.Tensor, audio: torch.Tensor, frame_len: torch.Tensor):
         z, offsets, y = latent_windows(latents, audio, frame_len, self.repeat, self.segment, self.context, self.hop,
-                                       self.right)
+                                       self.right, pad=self.be.causal)
         return (z, offsets), y
 
     def audio_samples(self, frames: int) -> int:
