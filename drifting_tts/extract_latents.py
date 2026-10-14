@@ -62,6 +62,8 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--workers", type=int, default=12, help="processes preparing the waveforms")
     p.add_argument("--prefetch", type=int, default=8, help="Hub shards downloaded at once")
     p.add_argument("--batch-seconds", type=float, default=640.0, help="padded audio per encoder batch")
+    p.add_argument("--max-pending", type=int, default=2048,
+                   help="waveforms prepared ahead of the encoder (bounds the memory)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--tf32", action="store_true",
                    help="TF32 matmuls / convolutions (Mimi latents differ from fp32 by ~2e-4, below fp16 storage)")
@@ -205,6 +207,7 @@ def _shard_rows(files: list[str], held_out: frozenset[str], speaker_column: str,
 @torch.inference_mode()
 def run_parquet(args) -> None:
     import random
+    import threading
     from multiprocessing import Pool
 
     from .latents import load_backend
@@ -259,10 +262,20 @@ def run_parquet(args) -> None:
         encode(batch)
         buffer = []
 
+    # Pool.imap keeps every finished result until it is consumed: workers that outrun the encoder would fill the
+    # memory (10k h: the 60 GB limit after 6 min), so at most --max-pending rows are handed out ahead of it.
+    pending = threading.Semaphore(args.max_pending)
+
+    def throttled(rows):
+        for row in rows:
+            pending.acquire()
+            yield row
+
     rows = _shard_rows(files, held_out, args.speaker_column, args.prefetch, out / "_shards")
     with open(out / "mels.bin", "wb") as fm, Pool(args.workers, initializer=_init_worker,
                                                   initargs=(args.language,)) as pool:
-        for res in tqdm(pool.imap(_prepare_row, rows, chunksize=8), desc=f"extract {args.backend}"):
+        for res in tqdm(pool.imap(_prepare_row, throttled(rows), chunksize=8), desc=f"extract {args.backend}"):
+            pending.release()
             if res is None or len(res[1]) > args.max_seconds * SAMPLE_RATE:
                 skipped += 1
                 continue
