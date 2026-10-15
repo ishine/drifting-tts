@@ -50,7 +50,9 @@ streamed from the Hub while training, with an English character frontend: WER 1.
 intelligible as the recordings through the same vocoder (1.57%), UTMOSv2 2.93; 3.25 with BigVGAN-v2 fine-tuned
 on its mels. Its duration predictor, re-fitted to the mean duration, pauses at punctuation as long as the recordings
 do: 1.09 s per sentence against 1.19 s, where the log-duration regressor paused 0.45 s
-([docs/ENGLISH.md](docs/ENGLISH.md)).
+([docs/ENGLISH.md](docs/ENGLISH.md)). Released for non-commercial use (CC BY-NC-SA 4.0, as its training data's
+generator): [Vyvo/drifting-tts-en](https://huggingface.co/Vyvo/drifting-tts-en), demo
+[Vyvo/drifting-tts-en-demo](https://huggingface.co/spaces/Vyvo/drifting-tts-en-demo).
 
 **Experimental:** the same model trained in the latent space of an audio VAE, with the VAE decoder fine-tuned on
 its latents: [DAC-VAE](https://huggingface.co/Vyvo/drifting-tts-tr-dacvae) (WER 1.32%, UTMOSv2 2.71) and
@@ -274,6 +276,7 @@ be added later by fine-tuning ([docs/TRAINING.md](docs/TRAINING.md#adding-a-voic
 | [space/](space/) | the Gradio demo (`scripts/deploy_space.sh` deploys it) |
 | [space_test/](space_test/) | the private test Space: the models under test, one tab each (`scripts/deploy_test_space.sh`) |
 | [space_en/](space_en/) | a private Space of its own for the English model with its fine-tuned BigVGAN-v2 (docs/ENGLISH.md; `scripts/deploy_english_space.sh`) |
+| [space_en_demo/](space_en_demo/), [release_en/](release_en/) | the public English demo (weights from the model repo; `scripts/deploy_english_demo.sh`) and the model repo's card and voices (`scripts/prepare_english_release.py`) |
 | [space_mimi/](space_mimi/) | a private Space of its own for the English model on Mimi latents (docs/MIMI.md; `scripts/deploy_mimi_space.sh`) |
 | [drifting_tts/mlx/](drifting_tts/mlx/) | MLX inference for Apple silicon (`python -m drifting_tts.mlx`) |
 | [drifting-tts-swift](https://github.com/kadirnar/drifting-tts-swift) | native Swift MLX engine and iPhone app (separate repository) |
