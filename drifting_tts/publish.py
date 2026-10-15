@@ -21,6 +21,8 @@ TTS_KEYS = ("ema", "config", "num_speakers", "n_mels", "step", "stats", "duratio
             "duration_scales")
 # Vocos fine-tune: what drifting_tts.vocoder._from_checkpoint reads
 VOCOS_KEYS = ("vocos", "init", "step", "mel", "head_padding", "noise_channels")
+# BigVGAN fine-tune: what drifting_tts.vocoder.load_bigvgan reads
+BIGVGAN_KEYS = ("generator", "hparams", "repo", "step", "noise_channels")
 PATH_RE = re.compile(r"(/workspace|/root|/home/|/tmp/|/mnt/|/data/|/Users/|[A-Za-z]:\\)")  # absolute paths
 GENERIC_DATA_ROOT = "data/train"
 
@@ -39,6 +41,19 @@ def export_vocos(ck: dict) -> dict:
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", init) or Path(init).exists():
         raise ValueError(f"Vocos 'init' must be a Hub repo id such as charactr/vocos-mel-24khz, got {init!r}")
     out["vocos"] = _tensors_to_cpu(out["vocos"])
+    return out
+
+
+def export_bigvgan(ck: dict, half: bool = False) -> dict:
+    """A ``finetune-vocoder`` BigVGAN checkpoint (``bigvgan_ft.pt``) -> ``{generator, hparams, repo, step}``.
+    ``half``: the weights stored in fp16, half the file (the English fine-tune: 450 -> 225 MB, a Space stores 1 GB);
+    ``load_bigvgan`` loads them into the fp32 generator."""
+    out = {k: ck[k] for k in BIGVGAN_KEYS if k in ck}
+    if "generator" not in out:
+        raise ValueError("not a BigVGAN checkpoint (no 'generator' state dict)")
+    out["generator"] = _tensors_to_cpu(out["generator"])
+    if half:
+        out["generator"] = {k: v.half() if v.is_floating_point() else v for k, v in out["generator"].items()}
     return out
 
 

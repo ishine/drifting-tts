@@ -116,7 +116,9 @@ class VocosGAN:
       warm-up over ``train.warmup_steps``; ``train.lr_schedule: cosine`` decays every rate to ``train.lr_min_ratio``
       of its peak over ``train.steps``.
     - ``train.init_from``: start from another fine-tune's ``last.pt`` at step 0 (the generator, the discriminators it
-      has and, for an unchanged set, their optimizer states), used when this run has no ``last.pt`` of its own.
+      has and, for an unchanged set, their optimizer states), used when this run has no ``last.pt`` of its own. An
+      exported vocoder (``vocos_ft.pt``, or a registry name such as ``vocos-v2``) gives the generator only: the
+      discriminators start fresh (``train.disc_warmup_steps``).
     - ``train.iaf_loss_coeff``: :func:`phase_derivative_loss` against the recording (instantaneous frequency, which a
       time shift of the output does not change), on recorded-mel batches, or on every batch with
       ``train.iaf_on_gta``.
@@ -306,8 +308,18 @@ class VocosGAN:
     def init_from(self, path: str) -> None:
         """Weights (and optimizer states where the parameter sets match) of a finished run's ``last.pt``; the
         learning rates stay this run's."""
+        if not Path(path).is_file():
+            from .vocoder import VOCODERS, _hub_checkpoint
+
+            e = VOCODERS.get(path)
+            if e is None or e.kind != "vocos" or not e.hub_file:
+                raise ValueError(f"train.init_from: {path!r} is neither a file nor a fine-tuned Vocos of the registry")
+            path = e.local if e.local and Path(e.local).is_file() else _hub_checkpoint(path, e.hub_file)
         ck = torch.load(path, map_location="cpu", weights_only=False)
         self.vocos.load_state_dict(ck["vocos"])
+        if "opt_g" not in ck:  # an exported vocoder: the generator only
+            print(f"initialised from {path} (exported, step {ck.get('step')}): generator", flush=True)
+            return
         _load_optimizer(self.opt_g, ck["opt_g"])
         loaded = ["generator"]
         for k in ("mpd", "mrd"):

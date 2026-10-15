@@ -78,6 +78,23 @@ def test_init_from_a_finished_run(tmp_path, discriminators):
     assert torch.isfinite(torch.tensor(new.step(mel, audio, 1)["gen"]))
 
 
+def test_init_from_an_exported_vocoder(tmp_path):
+    """An exported vocos_ft.pt (no optimizer, no discriminators): the generator only; registry names resolve."""
+    torch.manual_seed(0)
+    old = VocosGAN(_cfg(tmp_path), "cpu", mel="bigvgan")
+    old.export(tmp_path / "vocos_ft.pt", 40000)
+    new = VocosGAN(_cfg(tmp_path), "cpu", mel="bigvgan")
+    mrd = [p.clone() for p in new.mrd.parameters()]
+    new.init_from(str(tmp_path / "vocos_ft.pt"))
+    for a, b in zip(new.vocos.parameters(), old.vocos.parameters()):
+        assert torch.equal(a, b)
+    assert all(torch.equal(a, b) for a, b in zip(new.mrd.parameters(), mrd)) and len(new.opt_g.state) == 0
+    mel, audio = _batch()
+    assert torch.isfinite(torch.tensor(new.step(mel, audio, 1)["gen"]))
+    with pytest.raises(ValueError):
+        new.init_from("bigvgan-v2-ft")  # not a Vocos
+
+
 def test_bigvgan_recipe_losses_and_warmup(tmp_path):
     """BigVGAN's balance: summed LSGAN terms, feature matching x 2, multi-scale mel; separate D rate, G warm-up."""
     pytest.importorskip("nnAudio")
