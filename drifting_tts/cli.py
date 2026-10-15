@@ -20,6 +20,7 @@ COMMANDS: dict[str, str] = {
     "benchmark": "drifting_tts.benchmark",
     "merge-data": "drifting_tts.merge_data",
     "calibrate-durations": "drifting_tts.calibrate",
+    "train-durations": "drifting_tts.train_durations",
     "finetune-vocoder": "drifting_tts.finetune_vocoder",
     "extract-latents": "drifting_tts.extract_latents",
     "prosody-cache": "drifting_tts.prosody_cache",
