@@ -5,9 +5,12 @@ English Space (``space_en/``), with the vocoder there.
 Files beside this app (``scripts/deploy_test_space.sh``, ``scripts/deploy_english_space.sh``): ``ardrift_en.pt`` (the
 model), ``english_voices.json`` (the voices offered: label and speaker ID, how they were picked, and the model's
 measured results) and, optionally, ``bigvgan_en.pt``: BigVGAN-v2 fine-tuned on this model's own mels (issue #70),
-offered next to Vocos v2.
+offered next to Vocos v2, and ``durations_en.pt``: the duration predictor re-fitted to the mean duration
+(``train-durations``, issue #72; the regressor's geometric mean shortens the pauses at punctuation to a third), offered
+next to the model's own.
 """
 
+import copy
 import json
 import os
 import time
@@ -15,6 +18,7 @@ from pathlib import Path
 
 import gradio as gr
 import numpy as np
+import torch
 
 from drifting_tts.audio import SAMPLE_RATE
 from drifting_tts.synthesize import Synthesizer
@@ -34,6 +38,11 @@ synth = Synthesizer(HERE / "ardrift_en.pt", DEVICE, vocoder="vocos-v2")
 VOCODERS = {"Vocos v2": synth}
 if (HERE / "bigvgan_en.pt").is_file():  # first: the default
     VOCODERS = {"BigVGAN-v2, İngilizce ince ayar": synth.variant(vocoder=str(HERE / "bigvgan_en.pt")), **VOCODERS}
+DURATIONS = {}  # label -> duration predictor; every synthesizer above shares the one model, its predictor is swapped
+if (HERE / "durations_en.pt").is_file():  # first: the default
+    fitted = copy.deepcopy(synth.model.encoder.duration)
+    fitted.load_state_dict(torch.load(HERE / "durations_en.pt", map_location="cpu", weights_only=True)["duration"])
+    DURATIONS = {"Yeni: ortalama süreler": fitted.eval(), "Eski: modelin kendi süreleri": synth.model.encoder.duration}
 MAX_CHARS = 600
 
 EXAMPLES = [
@@ -50,7 +59,7 @@ def results_md() -> str:
 
 
 @gpu
-def generate(text, voice, vocoder, temperature, rate, seed):
+def generate(text, voice, vocoder, durations, temperature, rate, seed):
     text = " ".join((text or "").split())
     if not text:
         raise gr.Error("Lütfen İngilizce bir metin girin.")
@@ -60,6 +69,8 @@ def generate(text, voice, vocoder, temperature, rate, seed):
     if not normalized:
         raise gr.Error("Normalleştirmeden sonra okunacak bir şey kalmadı.")
     v = VOICES[voice]
+    if DURATIONS:
+        synth.model.encoder.duration = DURATIONS[durations]
     t0 = time.time()
     wav, info = VOCODERS[vocoder](text, speaker=int(v["id"]), cfg_scale=1.0, temperature=float(temperature),
                       length_scale=1.0 / float(rate), seed=int(seed))
@@ -81,6 +92,8 @@ with gr.Blocks(title="Drifting TTS: English (test)") as demo:
             voice = gr.Dropdown(list(VOICES), value=next(iter(VOICES)), label="Ses")
             vocoder = gr.Radio(list(VOCODERS), value=next(iter(VOCODERS)), label="Vocoder",
                                visible=len(VOCODERS) > 1)
+            durations = gr.Radio(list(DURATIONS) or ["-"], value=next(iter(DURATIONS), "-"), label="Duraklamalar",
+                                 info="Yeni: virgül ve noktalarda kayıtlardaki kadar durur", visible=bool(DURATIONS))
             with gr.Accordion("Ayarlar", open=False):
                 temperature = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Gürültü sıcaklığı",
                                         info="0.5 ölçülen ayar")
@@ -92,7 +105,7 @@ with gr.Blocks(title="Drifting TTS: English (test)") as demo:
             stats = gr.Markdown()
     gr.Examples(EXAMPLES, inputs=[text])
     gr.Markdown(results_md())
-    button.click(generate, [text, voice, vocoder, temperature, rate, seed], [audio, stats])
+    button.click(generate, [text, voice, vocoder, durations, temperature, rate, seed], [audio, stats])
 
 if __name__ == "__main__":
     demo.queue(max_size=20).launch()

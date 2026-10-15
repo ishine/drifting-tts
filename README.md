@@ -48,7 +48,9 @@ the same UTMOSv2, and its intonation is the closest to the recordings measured h
 ([VoiceHub/echo-clones-10kh-en](https://huggingface.co/datasets/VoiceHub/echo-clones-10kh-en), 4,000 speakers),
 streamed from the Hub while training, with an English character frontend: WER 1.42% on 500 held-out sentences, as
 intelligible as the recordings through the same vocoder (1.57%), UTMOSv2 2.93; 3.25 with BigVGAN-v2 fine-tuned
-on its mels ([docs/ENGLISH.md](docs/ENGLISH.md)).
+on its mels. Its duration predictor, re-fitted to the mean duration, pauses at punctuation as long as the recordings
+do: 1.09 s per sentence against 1.19 s, where the log-duration regressor paused 0.45 s
+([docs/ENGLISH.md](docs/ENGLISH.md)).
 
 **Experimental:** the same model trained in the latent space of an audio VAE, with the VAE decoder fine-tuned on
 its latents: [DAC-VAE](https://huggingface.co/Vyvo/drifting-tts-tr-dacvae) (WER 1.32%, UTMOSv2 2.71) and

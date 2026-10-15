@@ -18,7 +18,7 @@ import torch
 
 # acoustic model: what drifting_tts.train.load_tts and Synthesizer read
 TTS_KEYS = ("ema", "config", "num_speakers", "n_mels", "step", "stats", "duration_scale", "temperature",
-            "duration_scales")
+            "duration_scales", "durations")
 # Vocos fine-tune: what drifting_tts.vocoder._from_checkpoint reads
 VOCOS_KEYS = ("vocos", "init", "step", "mel", "head_padding", "noise_channels")
 # BigVGAN fine-tune: what drifting_tts.vocoder.load_bigvgan reads
@@ -55,6 +55,16 @@ def export_bigvgan(ck: dict, half: bool = False) -> dict:
     if half:
         out["generator"] = {k: v.half() if v.is_floating_point() else v for k, v in out["generator"].items()}
     return out
+
+
+def export_durations(ck: dict) -> dict:
+    """The duration predictor of a ``train-durations`` checkpoint alone -> ``{duration, durations}`` (its state dict and
+    how it was fitted), for a Space that already holds the model: a few hundred kB against the model's 356 MB."""
+    prefix = "encoder.duration."
+    state = {k[len(prefix):]: v for k, v in ck["ema"].items() if k.startswith(prefix)}
+    if "durations" not in ck or not state:
+        raise ValueError("not a train-durations checkpoint (no 'durations' record)")
+    return {"duration": _tensors_to_cpu(state), "durations": dict(ck["durations"])}
 
 
 def _clean_config(node, key: str = ""):

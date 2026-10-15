@@ -154,9 +154,9 @@ percentile of the 20 ms frame energies minus the 95th, lower is quieter):
 
 - **The vocoder gap is closed**: the model's output through the fine-tuned BigVGAN scores close to the recordings
   through it (3.245 against 3.294 on 500), and higher than the recordings through Vocos v2.
-- **The noise in the pauses is the model's**: its floor is 6-7 dB above the recordings' with either vocoder.
-  BigVGAN reproduces the recordings' own floor, Vocos v2 smooths it. A cleaner output needs work on the acoustic
-  model.
+- **The model's higher noise floor is shorter pauses, not noise** (see [Pauses](#pauses-the-duration-predictor-re-fitted-to-the-mean-72)):
+  the percentile floor rises when an utterance has less silence. Under the recordings' durations the model's pauses
+  are as quiet as theirs.
 - **Vocos v2 gains little** (+0.05 at 40k, its copy-synthesis 2.93 → 3.10): too small a network, or the fresh
   discriminators.
 - **Cost**: 112 M parameters against 13.5 M. On the RTX 5090 the whole pipeline's real-time factor goes from 0.14 to
@@ -165,6 +165,53 @@ percentile of the 20 ms frame energies minus the 95th, lower is quieter):
   `scripts/deploy_english_space.sh`; fp16 weights, 225 MB). The test Space has no room left: a Space stores at most
   1 GB, every stored file version included. Its English tab keeps Vocos v2. The vocoder is not on the Hub and not in
   the vocoder registry.
+
+## Pauses: the duration predictor re-fitted to the mean (#72)
+
+#72 planned a discriminator against the pause noise of the table above. The measurement came first (val 100 or 200,
+BigVGAN-v2 GTA 40k, T 0.5, mel-domain frame energies), and the noise is not there:
+
+- **Under the recordings' own durations (MAS), the model's pauses are as quiet as the recordings'.** Mel noise floor:
+  −59.3 dB teacher-forced and −59.0 dB free-running, against −59.0 dB.
+- **With its predicted durations, an utterance holds less silence, not louder silence.**
+  - The floor rises to −53.3 dB.
+  - 18% of the frames are more than 40 dB below the loudest, against 34% in the recordings.
+  - The 20 quietest frames are at −72.3 dB, against −74.0 dB.
+  - A percentile floor measures how much of an utterance is silent.
+- **The missing silence is at punctuation.** UTMOSv2 does not hear it: the model scores 3.316, its copy-synthesis
+  3.314.
+- **Nothing for a discriminator to learn**, so #72 changed course.
+
+**The cause.** The duration predictor regresses log-durations (`duration_loss`), so it learns the geometric mean. A
+comma is read with no pause by one speaker and a long one by the next, and the geometric mean of such a spread is a
+fraction of its mean. Letters vary little, so for them the two means agree.
+
+**The fix.** `drifting-tts train-durations` trains only the duration predictor (0.54 M parameters, the rest frozen)
+on the model's own MAS durations. It uses a Poisson loss, minimised at the mean, on the duration minus half a frame:
+synthesis rounds every duration up, which adds half a frame on average. Without that offset the ~150 tokens of a
+sentence came out 0.8 s long. 4,000 steps on `data/en_pilot`, 3 minutes on the RTX 5090.
+
+Seconds per val utterance (200), by where the tokens are:
+
+| | punctuation | word gaps | letters | edges | total |
+|---|---|---|---|---|---|
+| recording (MAS) | 1.19 | 0.29 | 4.29 | 0.13 | 5.90 |
+| regressor (log-durations) | 0.45 | 0.32 | 4.13 | 0.13 | 5.04 |
+| **re-fitted (Poisson)** | **1.09** | **0.29** | **4.15** | 0.14 | **5.66** |
+
+On the 500 held-out utterances (BigVGAN-v2 GTA 40k, as above):
+
+| durations | WER | CER | UTMOSv2 | similarity |
+|---|---|---|---|---|
+| regressor | 1.35% | 0.60% | 3.245 | 0.824 |
+| **re-fitted** | 1.39% | 0.61% | 3.236 | **0.846** |
+
+- **Intelligibility and naturalness are unchanged**: 212 word errors against 207 of 15,302 words. UTMOSv2 differs by
+  −0.008 sentence by sentence (95%: −0.034 to +0.017).
+- **Closer to the speaker**: similarity +0.022 (95%: +0.019 to +0.025), higher on 398 of 500 sentences. Both rows use
+  the same vocoder, so the copy-synthesis reference is the same.
+- **Where**: the private English Space offers both and defaults to the re-fitted one. It holds only the predictor
+  (`durations_en.pt`, 2.2 MB, `drifting_tts.publish.export_durations`), since the Space stores at most 1 GB.
 
 ## Limits
 
@@ -189,6 +236,8 @@ drifting-tts evaluate --model runs/ar_en_10k/model_ema.pt --split val --num 100 
 drifting-tts finetune-vocoder --config configs/vocoder_bigvgan_en_gta.yaml --workdir runs/en_bigvgan_gta
 drifting-tts evaluate --model runs/ar_en_10k/model_ema.pt --split val --num 100 --temperature 0.5 \
     --vocoder runs/en_bigvgan_gta/bigvgan_ft_40000.pt
+# pauses (#72): the duration predictor re-fitted to the mean duration, the rest of the model unchanged
+drifting-tts train-durations --model runs/ar_en_10k/model_ema.pt --out runs/en_dur/model_poisson.pt
 ```
 
 ```python
