@@ -5,11 +5,16 @@ One step:
 1. the text encoder and monotonic alignment, prior and duration losses (as ``train``);
 2. the frame-aligned condition and the target mel, padded to whole patches; every utterance is used whole;
 3. the causal backbone, teacher-forced on the previous target patches plus noise of a random level per utterance
-   (up to ``drift.input_noise``), gives one state per patch;
+   (up to ``drift.input_noise``), gives one state per patch. With ``drift.self_history`` > 0, that share of the
+   utterances has the model's own patches as its history instead: each drawn by the head (at
+   ``drift.self_history_temperature``) after the recorded ones, in a first teacher-forced pass without gradients, as at
+   inference after one step. The targets stay the recording's, so the model learns not to carry its own errors on
+   (#73: the podcast voices' pauses are up to 5 dB louder than the recordings' teacher-forced, up to 18 dB
+   free-running);
 4. at ``drift.max_rows`` random valid patches (rows), the head draws ``drift.gen_per_cond`` samples from noise; the
    drifting loss (:func:`~drifting_tts.drift.kyutai_drift_loss`, one learned temperature) pulls them to the recorded
    patch and pushes them apart, in the kernel space of :func:`~drifting_tts.models.ar.ar_features` (the whole patch,
-   each frame, each frame's harmonic detail).
+   each frame, each frame's harmonic detail and, with ``drift.energy_bands``, each frame's band energies).
 """
 
 from __future__ import annotations
@@ -39,7 +44,9 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("overrides", nargs="*", help="config overrides, e.g. train.steps=1000")
 
 
-def training_step(model: ARDriftTTS, batch: dict, cfg: Config, device, tau: torch.Tensor) -> tuple:
+def training_step(model: ARDriftTTS, batch: dict, cfg: Config, device, tau: torch.Tensor,
+                  mel_std: float | None = None) -> tuple:
+    """One training step; ``mel_std``: the scalar std of the mel statistics (for ``drift.energy_bands``)."""
     dc, lc = cfg.drift, cfg.loss
     text, text_len, y, y_len, spk = (batch[k].to(device, non_blocking=True)
                                      for k in ("text", "text_len", "mel", "mel_len", "spk"))
@@ -58,8 +65,13 @@ def training_step(model: ARDriftTTS, batch: dict, cfg: Config, device, tau: torc
     noise = torch.rand(B, device=device) * float(dc.get("input_noise", 0.0))
     p_drop = float(dc.get("cond_dropout", 0.0))  # the null condition of guidance
     drop = torch.rand(B, device=device) < p_drop if p_drop > 0 else None
+    hist, share = y, float(dc.get("self_history", 0.0))
+    if share > 0:  # the model's own one-step patches as the history of a share of the utterances
+        with amp:
+            own = model.gta(cond, y, spk, float(dc.get("self_history_temperature", 0.5))).float()
+        hist = torch.where((torch.rand(B, device=device) < share)[:, None, None], own, y)
     with amp:
-        s = model.teacher_forced(cond, y, spk, noise, drop)  # [B, S, dim]
+        s = model.teacher_forced(cond, hist, spk, noise, drop)  # [B, S, dim]
     S = s.shape[1]
     valid = (torch.arange(S, device=device)[None] * k < y_len[:, None])  # steps that start inside the utterance
     idx = valid.flatten().nonzero()[:, 0]
@@ -73,10 +85,14 @@ def training_step(model: ARDriftTTS, batch: dict, cfg: Config, device, tau: torc
     with amp:
         res = model.head(rows.repeat_interleave(G, 0), z)
     x = base[:, None] + res.float().view(R, G, -1)  # [R, G, k * C]
-    detail = bool(dc.get("detail", True))
-    f_gen = ar_features(x, k, C, detail)
+    opts = {"detail": bool(dc.get("detail", True)), "energy_bands": dc.get("energy_bands")}
+    if opts["energy_bands"]:
+        if mel_std is None:
+            raise ValueError("drift.energy_bands needs the scalar std of the mel statistics (log-mel data)")
+        opts["energy_scale"] = 2.0 * float(mel_std)
+    f_gen = ar_features(x, k, C, **opts)
     with torch.no_grad():
-        f_pos = ar_features(target[:, None], k, C, detail)
+        f_pos = ar_features(target[:, None], k, C, **opts)
     l_drift, info = feature_drift_loss(f_gen, f_pos, None, taus=tau, reduce="mean",
                                        key_weights=dc.get("key_weights"))
     loss = lc.drift * l_drift + lc.prior * l_prior + lc.duration * l_dur
@@ -178,13 +194,14 @@ def run(args) -> None:
 
             vocoder = load_vocoder(tc.get("vocoder", "vocos-v2"), device)
 
+    mel_std = None if ds.stats.per_channel else ds.stats.std  # drift.energy_bands: log-mel data only
     model.train()
     if rng is not None:
         set_rng_state(rng)
     it = infinite(loader)
     t0, agg = time.time(), {}
     while step < tc.steps:
-        loss, metrics = training_step(model, next(it), cfg, device, tau)
+        loss, metrics = training_step(model, next(it), cfg, device, tau, mel_std)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         gnorm_enc = torch.nn.utils.clip_grad_norm_(model.encoder.parameters(), tc.grad_clip)

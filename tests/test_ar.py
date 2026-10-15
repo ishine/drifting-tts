@@ -152,3 +152,45 @@ def test_gta_draws_each_patch_after_the_recorded_ones():
     a, b = m.gta(cond, y, spk, 0.5, gen()), m.gta(cond, y, spk, 0.5, gen())
     assert torch.equal(a, b) and not torch.allclose(a, g)
     assert m.gta(cond, y[..., :30], spk, 0.5).shape == (1, 100, 30)  # not a whole number of patches
+
+
+def test_band_energy_follows_the_loudest_bins():
+    from drifting_tts.models.ar import band_energy
+
+    quiet = torch.full((2, 100), -3.0)
+    loud = quiet.clone()
+    loud[:, 10] = 1.0  # one loud bin in band 0
+    e_q, e_l = band_energy(quiet, 4.0, (0, 50, 100)), band_energy(loud, 4.0, (0, 50, 100))
+    assert e_q.shape == (2, 2)
+    torch.testing.assert_close(e_q, torch.full((2, 2), -3.0))
+    # the log-mel mean of band 0 moves by 4 / 50 = 0.08; its energy moves to within log(50) / 4 of the loud bin
+    assert e_l[0, 0] > 0.0 and torch.equal(e_l[:, 1], e_q[:, 1])
+    f = ar_features(torch.randn(3, 5, 400), 4, 100, energy_bands=(0, 25, 50, 75, 100), energy_scale=4.0)
+    assert f["energy"].shape == (3, 5, 4, 4)
+
+
+def test_training_step_with_band_energies_and_own_history():
+    import pytest
+
+    from drifting_tts.train_ar import training_step
+
+    m = _model().train()
+    cfg = load_config("configs/ar_tts.yaml", ["drift.gen_per_cond=4", "drift.max_rows=8",
+                                              "drift.energy_bands=[0,25,50,75,100]", "drift.self_history=1.0"])
+    batch = {"text": torch.randint(3, 30, (2, 11)), "text_len": torch.tensor([11, 9]),
+             "mel": torch.randn(2, 100, 40), "mel_len": torch.tensor([40, 30]), "spk": torch.tensor([0, 1])}
+    tau = torch.nn.Parameter(torch.tensor(1.0))
+    with pytest.raises(ValueError, match="energy_bands"):
+        training_step(m, batch, cfg, "cpu", tau)
+    loss, metrics = training_step(m, batch, cfg, "cpu", tau, mel_std=2.4)
+    loss.backward()
+    assert torch.isfinite(loss) and "p_data" in metrics
+    assert m.head.out.weight.grad.abs().sum() > 0 and m.blocks[0].attn.qkv.weight.grad is not None
+
+    # self_history: the backbone sees the head's own one-step patches as the history, not the recording
+    seen = []
+    orig = m.teacher_forced
+    m.teacher_forced = lambda cond, y, *a: seen.append(y) or orig(cond, y, *a)
+    training_step(m, batch, cfg, "cpu", tau, mel_std=2.4)
+    hist = seen[-1]
+    assert hist.shape[-1] == 40 and not torch.allclose(hist, batch["mel"][:, :, :40])
