@@ -1,0 +1,18 @@
+# Issue #70: BigVGAN-v2 fine-tuned on the English ARDrift model's own mels (GTA; configs/ar_tts_en_10k.yaml). NVIDIA's
+# released generator is transparent on the English recordings' mels (val 100: UTMOSv2 3.30, recordings 3.26) but not
+# on the model's (2.68); Vocos v2, the English model's vocoder, trained on Turkish speech, loses 0.33 on the
+# recordings (2.93). The recipe is vocoder_bigvgan.yaml's: the released generator, discriminators and AdamW states.
+# Result (docs/ENGLISH.md): 40k on the 500 held-out: UTMOSv2 3.245 against Vocos v2's 2.930, WER 1.35% vs 1.42%.
+base: vocoder_bigvgan.yaml
+
+data:
+  root: data/en_mel_ft     # 37k utterances (105 h) of the 10k-h corpus with their 24 kHz audio, bigvgan mels
+  min_quality: 0
+
+tts:
+  path: runs/ar_en_10k/model_ema.pt
+
+train:
+  steps: 40000
+  gta_cfg: 1.0             # an autoregressive model's GTA mels are drawn without guidance
+  keep_snapshots: true     # bigvgan_ft_<step>.pt: each snapshot is evaluated

@@ -100,6 +100,70 @@ MB, a Space stores at most 1 GB): on val 100 the same WER / CER as fp32 (2.23% /
   pilot, with ~9 utterances per speaker, stopped at 0.42.
 - **UTMOSv2 at the recordings' level** (2.90-3.01 against 2.926): the synthetic source is the ceiling.
 
+## Vocoder: BigVGAN-v2 fine-tuned on the model's mels (#70)
+
+Vocos v2, the vocoder of the tables above, was trained on Turkish speech. On the English recordings' mels it loses
+0.33 UTMOSv2 (val 100: 2.926 against the recordings' 3.259). NVIDIA's BigVGAN-v2 is transparent on those mels
+(3.296), but on the model's mels it falls to 2.680, against Vocos v2's 2.997. Both vocoders were fine-tuned on the
+200k model's own mels (GTA: 80% of the batches are teacher-forced generated mels at noise temperature 0.5, the rest
+recorded mels), 40k steps each, side by side on one RTX 5090. The data is the 37,115 utterances (105 h train) of the
+Mimi decoder fine-tune ([MIMI.md](MIMI.md#fine-tuning-mimis-decoder)): the same prepared audio, as BigVGAN log-mels
+(`data/en_mel_ft`).
+
+- **BigVGAN-v2** (`configs/vocoder_bigvgan_en_gta.yaml`): the recipe of `bigvgan-v2-ft`, i.e. NVIDIA's generator,
+  discriminators and AdamW moments, batch 4, lr 1.35e-5; 1.9-2.4 it/s, 5.4 h.
+- **Vocos v2** (`configs/vocoder_vocos_en_gta.yaml`): Vocos v2's own recipe, from the published generator
+  (`train.init_from: vocos-v2`: an exported vocoder gives the generator only). Its discriminators were not
+  published, so fresh ones train alone for the first 2k steps.
+
+Val 100, the model's output through each snapshot (Whisper on the CPU, as the tables above; Vocos v2: 2.17% / 2.994):
+
+| step | BigVGAN-v2 WER | UTMOSv2 | Vocos v2 WER | UTMOSv2 |
+|---|---|---|---|---|
+| 5k | 2.10% | 3.165 | 2.30% | 2.927 |
+| 10k | 2.10% | 3.165 | 2.03% | 2.949 |
+| 15k | 2.17% | 3.207 | 2.10% | 2.985 |
+| 20k | 2.03% | 3.163 | 2.10% | 3.001 |
+| 25k | 2.03% | 3.197 | 2.10% | 2.981 |
+| 30k | 2.10% | 3.217 | 1.90% | 2.998 |
+| 35k | 2.17% | 3.178 | 2.03% | 3.025 |
+| 40k | 2.37% | **3.272** | 1.90% | 3.043 |
+
+The two best BigVGAN snapshots on all 500 held-out utterances (Whisper on the GPU, as the 500-utterance table
+above); copy-synthesis is the recordings' mels through the same vocoder:
+
+| vocoder | WER | CER | UTMOSv2 | copy-synthesis WER | UTMOSv2 |
+|---|---|---|---|---|---|
+| Vocos v2 | 1.42% | 0.64% | 2.930 | 1.57% | 2.907 |
+| BigVGAN-v2 GTA 30k | 1.38% | 0.62% | 3.177 | 1.57% | 3.276 |
+| **BigVGAN-v2 GTA 40k** | **1.35%** | **0.60%** | **3.245** | 1.57% | 3.294 |
+
+Against Vocos v2, sentence by sentence (the same mels): UTMOSv2 +0.315 ± 0.025 (95%), higher on 436 of 500; 10
+word errors fewer. Speaker similarity is left out: its reference is the copy-synthesis through the same vocoder.
+
+Where the noise is, on val 100 (DNSMOS P.835: SIG speech, BAK background, OVRL overall; noise floor: the 10th
+percentile of the 20 ms frame energies minus the 95th, lower is quieter):
+
+| | UTMOSv2 | SIG | BAK | OVRL | noise floor |
+|---|---|---|---|---|---|
+| recording | 3.259 | 3.53 | 4.12 | 3.29 | −57.3 dB |
+| copy-synthesis, Vocos v2 | 2.926 | 3.49 | 4.11 | 3.25 | −60.8 dB |
+| copy-synthesis, BigVGAN-v2 GTA 40k | 3.314 | 3.55 | 4.13 | 3.31 | −57.5 dB |
+| model, Vocos v2 | 2.997 | 3.48 | 4.07 | 3.21 | −52.2 dB |
+| model, BigVGAN-v2 GTA 40k | 3.280 | 3.52 | 4.07 | 3.26 | −50.9 dB |
+
+- **The vocoder gap is closed**: the model's output through the fine-tuned BigVGAN scores close to the recordings
+  through it (3.245 against 3.294 on 500), and higher than the recordings through Vocos v2.
+- **The noise in the pauses is the model's**: its floor is 6-7 dB above the recordings' with either vocoder.
+  BigVGAN reproduces the recordings' own floor, Vocos v2 smooths it. A cleaner output needs work on the acoustic
+  model.
+- **Vocos v2 gains little** (+0.05 at 40k, its copy-synthesis 2.93 → 3.10): too small a network, or the fresh
+  discriminators.
+- **Cost**: 112 M parameters against 13.5 M. On the RTX 5090 the whole pipeline's real-time factor goes from 0.14 to
+  0.16.
+- **Where**: the private test Space's English tab offers it as the default, next to Vocos v2 (fp16 weights, 225 MB).
+  It is not on the Hub and not in the vocoder registry.
+
 ## Limits
 
 - **Synthetic data**: the model learns EchoTTS's voices and its artefacts; a recorded corpus would be needed to go past
@@ -119,6 +183,10 @@ drifting-tts prepare --parquet-glob "hf://datasets/SynDataLab-EN/echo-clones-4m-
 drifting-tts train-ar --config configs/ar_tts_en.yaml --workdir runs/ar_en_pilot
 drifting-tts train-ar --config configs/ar_tts_en_10k.yaml --workdir runs/ar_en_10k     # streamed from the Hub
 drifting-tts evaluate --model runs/ar_en_10k/model_ema.pt --split val --num 100 --temperature 0.5 --vocoder vocos-v2
+# vocoder (#70): data/en_mel_ft = data/en_mimi_ft's utterances and audio.bin, with BigVGAN log-mels of that audio
+drifting-tts finetune-vocoder --config configs/vocoder_bigvgan_en_gta.yaml --workdir runs/en_bigvgan_gta
+drifting-tts evaluate --model runs/ar_en_10k/model_ema.pt --split val --num 100 --temperature 0.5 \
+    --vocoder runs/en_bigvgan_gta/bigvgan_ft_40000.pt
 ```
 
 ```python

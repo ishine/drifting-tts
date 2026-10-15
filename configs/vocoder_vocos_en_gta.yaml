@@ -1,0 +1,20 @@
+# Issue #70: Vocos v2 (the English model's vocoder, trained on Turkish speech) fine-tuned on the English ARDrift model's
+# own mels (GTA; configs/ar_tts_en_10k.yaml) with Vocos v2's recipe (vocoder_vocos_v2.yaml). It starts from the
+# published generator; its discriminators were not published, so fresh ones train alone first.
+# Result (docs/ENGLISH.md): +0.05 UTMOSv2 at 40k on val 100 (3.043 vs 2.994); BigVGAN-v2 went further (3.272).
+base: vocoder_vocos_v2.yaml
+
+data:
+  root: data/en_mel_ft     # 37k utterances (105 h) of the 10k-h corpus with their 24 kHz audio, bigvgan mels
+  min_quality: 0
+
+tts:
+  path: runs/ar_en_10k/model_ema.pt
+
+train:
+  init_from: vocos-v2      # the exported generator (vocos_v2.pt); fresh MPD + MRD
+  steps: 40000
+  disc_warmup_steps: 2000  # the fresh discriminators train alone first, the generator frozen
+  gta_temperature: 0.5     # the English model's inference temperature
+  gta_cfg: 1.0             # an autoregressive model's GTA mels are drawn without guidance
+  save_every: 2500

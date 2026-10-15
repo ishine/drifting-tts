@@ -183,6 +183,15 @@ def test_bigvgan_checkpoint_resolution(tmp_path, repo):
     assert not any(k.endswith("weight_v") for k in voc.model.state_dict())  # weight norm removed
     out = voc(torch.randn(1, 100, 12) - 5)
     assert out.shape == (1, 12 * HOP_LENGTH) and torch.isfinite(out).all()
+    from drifting_tts.publish import export_bigvgan
+
+    half = export_bigvgan({**torch.load(tmp_path / "bigvgan_ft.pt", weights_only=False), "opt_g": {}}, half=True)
+    assert set(half) == {"generator", "hparams", "repo", "step"}
+    assert all(v.dtype == torch.float16 for v in half["generator"].values() if v.is_floating_point())
+    torch.save(half, tmp_path / "bigvgan_half.pt")
+    small = load_vocoder(str(tmp_path / "bigvgan_half.pt"), "cpu")  # fp16 weights into the fp32 generator
+    mel = torch.randn(1, 100, 12) - 5
+    torch.testing.assert_close(small(mel), voc(mel), rtol=0, atol=1e-2)
 
 
 def _tiny_tts_checkpoint(tmp_path, backend: str) -> str:
