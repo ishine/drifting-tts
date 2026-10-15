@@ -161,8 +161,10 @@ percentile of the 20 ms frame energies minus the 95th, lower is quieter):
   discriminators.
 - **Cost**: 112 M parameters against 13.5 M. On the RTX 5090 the whole pipeline's real-time factor goes from 0.14 to
   0.16.
-- **Where**: the private test Space's English tab offers it as the default, next to Vocos v2 (fp16 weights, 225 MB).
-  It is not on the Hub and not in the vocoder registry.
+- **Where**: a private English Space of its own offers it as the default, next to Vocos v2 (`space_en/`,
+  `scripts/deploy_english_space.sh`; fp16 weights, 225 MB). The test Space has no room left: a Space stores at most
+  1 GB, every stored file version included. Its English tab keeps Vocos v2. The vocoder is not on the Hub and not in
+  the vocoder registry.
 
 ## Limits
 
