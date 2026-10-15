@@ -19,10 +19,14 @@ from .base import AudioBackend
 REPO, FILE, REVISION = "kyutai/pocket-tts", "languages/english_2026-09/model.safetensors", \
     "983151f13aaeab1b13c1e5e3c2c383d49a9edf3f"
 CONFIG = "english_2026-09.yaml"  # pocket-tts's config of those weights (its `mimi` section)
+WEIGHTS_ENV = "DRIFTING_TTS_MIMI_WEIGHTS"  # a local copy of those weights (at least their `mimi.` tensors)
 
 
 def load_mimi(device: str = "cpu"):
-    """Pocket TTS's Mimi with its released weights, in eval mode, ready for whole-utterance decoding."""
+    """Pocket TTS's Mimi with its released weights, in eval mode, ready for whole-utterance decoding. The weights are
+    ``$DRIFTING_TTS_MIMI_WEIGHTS`` if set (e.g. a Space without a Hub token for the gated repo), else the download."""
+    import os
+
     import safetensors.torch
     from huggingface_hub import hf_hub_download
     from pocket_tts.models.mimi import build_mimi
@@ -30,12 +34,23 @@ def load_mimi(device: str = "cpu"):
     from pocket_tts.utils.config import CONFIGS_DIR, load_config
 
     mimi = build_mimi(load_config(CONFIGS_DIR / CONFIG).mimi)
-    bundle = safetensors.torch.load_file(hf_hub_download(REPO, FILE, revision=REVISION))
+    bundle = safetensors.torch.load_file(os.environ.get(WEIGHTS_ENV) or hf_hub_download(REPO, FILE, revision=REVISION))
     mimi.load_state_dict({k.removeprefix("mimi."): v for k, v in bundle.items() if k.startswith("mimi.")}, strict=True)
     for name, module in mimi.named_modules():  # stateful layers find their state by name (as stamp_state_names)
         if isinstance(module, StatefulModule):
             module._module_absolute_name = name
     return mimi.to(device).eval()
+
+
+def save_weights(path) -> None:
+    """The ``mimi.`` tensors of the released weights (40 MB of 219) -> ``path``, for ``$DRIFTING_TTS_MIMI_WEIGHTS``
+    (``scripts/deploy_mimi_space.sh``)."""
+    import safetensors.torch
+    from huggingface_hub import hf_hub_download
+
+    bundle = safetensors.torch.load_file(hf_hub_download(REPO, FILE, revision=REVISION))
+    safetensors.torch.save_file({k: v for k, v in bundle.items() if k.startswith("mimi.")}, str(path),
+                                metadata={"source": f"{REPO}/{FILE}@{REVISION}", "license": "CC-BY-4.0"})
 
 
 class MimiBackend(AudioBackend):

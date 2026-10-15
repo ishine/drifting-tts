@@ -270,6 +270,7 @@ be added later by fine-tuning ([docs/TRAINING.md](docs/TRAINING.md#adding-a-voic
 | [docs/POCKET_TTS_GATE.md](docs/POCKET_TTS_GATE.md) | a Turkish Pocket TTS (autoregressive, Mimi latents) on Freya-100 with our judges and prosody metrics, and the Mimi codec gate (#42) |
 | [space/](space/) | the Gradio demo (`scripts/deploy_space.sh` deploys it) |
 | [space_test/](space_test/) | the private test Space: the models under test, one tab each (`scripts/deploy_test_space.sh`) |
+| [space_mimi/](space_mimi/) | a private Space of its own for the English model on Mimi latents (docs/MIMI.md; `scripts/deploy_mimi_space.sh`) |
 | [drifting_tts/mlx/](drifting_tts/mlx/) | MLX inference for Apple silicon (`python -m drifting_tts.mlx`) |
 | [drifting-tts-swift](https://github.com/kadirnar/drifting-tts-swift) | native Swift MLX engine and iPhone app (separate repository) |
 | [web/](web/) | the WebGPU demo and the ONNX pipeline in JavaScript (`scripts/deploy_webgpu_space.sh` deploys it) |

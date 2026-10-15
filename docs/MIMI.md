@@ -234,7 +234,13 @@ The loss falls only a little over 20k steps: on GTA latents from 1.40 to ~1.34, 
 - **The error is in the latents, not in the decoder's weights.** It would have to shrink at the source, for example:
   - adversarial post-training of ARDrift through the frozen decoder (#72);
   - a drift kernel in a feature space (#73).
-- **The mel + Vocos model stays the English model.** The Mimi model and its decoders are not published.
+- **The mel + Vocos model stays the English model.** The Mimi model is only in a private test Space of its own, with
+  the released decoder, to listen to (`space_mimi/`, `scripts/deploy_mimi_space.sh`, which refuses a public Space).
+  - Its weights are stored in fp16 (353 MB). On val 100 that changes nothing measurable: UTMOSv2 2.471 and WER 3.45%,
+    against 2.468 and 3.37% in fp32.
+  - Mimi's weights travel beside it: their `mimi.` tensors, 40 MB, CC BY 4.0, read through
+    `$DRIFTING_TTS_MIMI_WEIGHTS`. The Space needs no Hub token for the gated repo.
+  - The fine-tuned decoders are not published.
 
 ## Commands
 
@@ -254,4 +260,7 @@ drifting-tts finetune-vocoder --config configs/vocoder_mimi_decoder.yaml --workd
     train.gta_prob=0.5 train.adv_loss_coeff=0 train.fm_loss_coeff=0 train.lr=3e-5 train.warmup_steps=500  # recipe 3
 drifting-tts evaluate --model runs/ar_en_mimi/model_ema.pt --split val --num 100 --temperature 0.5 \
     --vocoder runs/mimi_dec_ft/decoder_ft.pt
+
+# the private Space: the model in fp16 (publish.export_tts(ck, half=True)) and the voices offered
+scripts/deploy_mimi_space.sh <private space> ardrift_en_mimi.pt english_voices.json
 ```
