@@ -2,7 +2,9 @@
 # truth alignment, "GTA"; docs/MIMI.md): the Mimi counterpart of vocoder_voxcpm2_decoder.yaml. The released decoder
 # turns small latent errors into audible noise (UTMOSv2 3.13 -> 2.46 with Gaussian noise of 0.2 std in the normalised
 # latent space); here it learns to turn the model's own latents into the recordings. The recipe is BigVGAN-v2's, with
-# NVIDIA's released 24 kHz discriminators.
+# NVIDIA's released 24 kHz discriminators. Result: no snapshot up to 40k steps beat the released decoder (the best,
+# 32.5k: UTMOSv2 2.474 against 2.505 on the 495 held-out utterances); neither did adversarial-only training or
+# distillation (train.teacher; docs/MIMI.md).
 data:
   root: data/en_mimi_ft     # utterances of data/en_mimi with their 24 kHz audio (audio.bin), docs/MIMI.md
   min_quality: 0
@@ -22,7 +24,7 @@ vocoder:
 
 train:
   seed: 0
-  steps: 20000
+  steps: 40000             # as run (docs/MIMI.md): planned for 20k, extended to 40k at 5k
   batch_size: 16           # utterances per batch, one segment each
   batch_frames: 24000
   segment_frames: 8        # Mimi frames (12.5 Hz) per segment: 0.64 s, 15360 samples at 24 kHz
