@@ -97,3 +97,26 @@ def test_mimi_decoder_training_path():
     for k, v in tuned.trainable_decoder().state_dict().items():
         torch.testing.assert_close(v, state[k])
     assert not torch.allclose(tuned.decode(z.detach()), be.decode(z.detach()), atol=1e-3)
+
+
+def test_mimi_local_weights(tmp_path, monkeypatch):
+    """$DRIFTING_TTS_MIMI_WEIGHTS (a Space without a Hub token): save_weights' file loads the same Mimi, no download."""
+    pytest.importorskip("pocket_tts")
+    import huggingface_hub
+
+    from drifting_tts.latents import mimi
+
+    if not isinstance(huggingface_hub.try_to_load_from_cache(mimi.REPO, mimi.FILE, revision=mimi.REVISION), str):
+        pytest.skip("Mimi weights not cached")
+    path = tmp_path / "mimi.safetensors"
+    mimi.save_weights(path)
+    released = mimi.load_mimi("cpu").state_dict()
+
+    def offline(*a, **k):
+        raise RuntimeError("no download")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", offline)
+    monkeypatch.setenv(mimi.WEIGHTS_ENV, str(path))
+    assert path.stat().st_size < 50e6
+    for k, v in mimi.load_mimi("cpu").state_dict().items():
+        torch.testing.assert_close(v, released[k])
