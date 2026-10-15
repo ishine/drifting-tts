@@ -1,9 +1,11 @@
 """Drifting TTS, English (the "English" tab of the private test Space, app.py): ARDrift trained from scratch on 10,000 h
-of synthetic English speech (docs/ENGLISH.md). Runs on its own too (``python english_app.py``).
+of synthetic English speech (docs/ENGLISH.md). Runs on its own too (``python english_app.py``): the app of the private
+English Space (``space_en/``), with the vocoder there.
 
-Files beside this app (``scripts/deploy_test_space.sh``): ``ardrift_en.pt`` (the model), ``english_voices.json``
-(the voices offered: label and speaker ID, how they were picked, and the model's measured results) and, optionally,
-``bigvgan_en.pt``: BigVGAN-v2 fine-tuned on this model's own mels (issue #70), offered next to Vocos v2.
+Files beside this app (``scripts/deploy_test_space.sh``, ``scripts/deploy_english_space.sh``): ``ardrift_en.pt`` (the
+model), ``english_voices.json`` (the voices offered: label and speaker ID, how they were picked, and the model's
+measured results) and, optionally, ``bigvgan_en.pt``: BigVGAN-v2 fine-tuned on this model's own mels (issue #70),
+offered next to Vocos v2.
 """
 
 import json
