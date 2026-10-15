@@ -12,6 +12,9 @@ sampler head), but on this repository's mels (decoded by Vocos v2), with aligned
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -404,10 +407,21 @@ class ARGenerator:
             yield x
 
 
-def ar_features(x: Tensor, k: int, n_mels: int, detail: bool = True) -> dict[str, Tensor]:
+def band_energy(frames: Tensor, scale: float, bands: Sequence[int]) -> Tensor:
+    """Log energy of mel bands per frame: normalised log-mel frames ``[..., n_mels]`` -> ``[..., len(bands) - 1]``,
+    ``log mean exp(scale * x) / scale`` over each band ``[bands[i], bands[i + 1])``. With ``scale`` twice the mel
+    statistics' std, ``scale * x`` is the log power up to a constant, so a band's value follows its loudest bins
+    (on a log-mel distance, every bin weighs alike, the noise floor's as much as the speech's: #73)."""
+    out = [torch.logsumexp(frames[..., a:b] * scale, -1) - math.log(b - a) for a, b in zip(bands[:-1], bands[1:])]
+    return torch.stack(out, -1) / scale
+
+
+def ar_features(x: Tensor, k: int, n_mels: int, detail: bool = True, energy_bands: Sequence[int] | None = None,
+                energy_scale: float = 1.0) -> dict[str, Tensor]:
     """Drift kernel features of patches ``[R, S, k * n_mels]`` (R rows, S samples): ``patch`` (the whole patch, one
     location), ``frame`` (each frame a location), ``detail`` (each frame minus its frequency-smoothed envelope: the
-    harmonic structure). Every map is ``[R, S, L, D]``."""
+    harmonic structure) and, with ``energy_bands``, ``energy`` (each frame's band energies, :func:`band_energy`).
+    Every map is ``[R, S, L, D]``."""
     from .mae import spectral_detail
 
     R, S, _ = x.shape
@@ -416,6 +430,8 @@ def ar_features(x: Tensor, k: int, n_mels: int, detail: bool = True) -> dict[str
     if detail:
         d = spectral_detail(frames.reshape(R * S, k, n_mels).transpose(1, 2)).transpose(1, 2)
         out["detail"] = d.reshape(R, S, k, n_mels)
+    if energy_bands:
+        out["energy"] = band_energy(frames, energy_scale, energy_bands)
     return out
 
 

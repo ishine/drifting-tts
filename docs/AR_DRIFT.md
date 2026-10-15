@@ -173,6 +173,42 @@ pitch from the recordings' median F0; the studio voice as the regression check):
 - In a private test Space only (`space_test/`, `scripts/deploy_test_space.sh`, which refuses a public Space): one
   tab for these voices, one for ARDrift next to v3.2 and v3.1, one for the results.
 
+## Pauses of the podcast voices (#73)
+
+#73 proposed computing the drifting kernel on features where the noise floor weighs less than in log-mels, because
+of a "pause noise" measured on English. On English that noise turned out to be shorter pauses
+([ENGLISH.md](ENGLISH.md#pauses-the-duration-predictor-re-fitted-to-the-mean-72)). On the six podcast voices the
+noise is real.
+
+Energy of the recording's quietest 10% of frames, aligned frame for frame under the recording's MAS durations, in dB
+above the recording (val, 20-30 per voice):
+
+| voice | teacher-forced | free-running |
+|---|---|---|
+| studio (722) | +1.1 | +2.0 |
+| podcast voices | +0.3 to +5.2, mean +2.5 | +3.9 to +17.7, mean +8.8 |
+
+- **Almost all of the extra energy is below ~1 kHz** (the lowest quarter of the mel bins): a murmur in the pauses.
+- **It grows when the model runs on its own patches**, more at noise temperature 0 than at 0.5. The model hears its
+  own slightly loud silence and carries it on.
+
+Three 5k-step continuations of the voices model (from its learned temperature, 0.0537; the export drops it) on the
+same corpus, measured on the six podcast voices (30 val utterances each; UTMOSv2 and Whisper with the predicted
+durations, Vocos v2):
+
+| run | free-running pause energy | teacher-forced | UTMOSv2 | WER |
+|---|---|---|---|---|
+| the voices model | +8.8 dB | +2.5 dB | 2.258 | 4.39% |
+| A: control (more of the same) | +8.8 dB | +2.9 dB | 2.256 | 4.27% |
+| B: band energies in the kernel (`drift.energy_bands`) | +8.8 dB | +3.2 dB | 2.284 | 4.46% |
+| C: own one-step history for half the utterances (`drift.self_history: 0.5`) | **+6.5 dB** | +2.7 dB | 2.263 | 4.36% |
+
+- **B, #73's idea, does nothing for the pauses.** The kernel sees each frame's band energies (`band_energy`: log of
+  the band's mean power, which follows its loudest bins), but the teacher-forced pauses were never far off.
+- **C goes at the cause.** A first teacher-forced pass draws the model's own patches. Half the utterances then use
+  them as their history, with the recording's patches as the targets, so the model learns not to carry its own
+  errors on. The worst voice drops from +17.7 to +12.2 dB. UTMOSv2 and WER do not move at 5k steps.
+
 ## Commands
 
 ```bash
