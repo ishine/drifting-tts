@@ -26,6 +26,7 @@ from .alignment import sequence_mask
 from .config import Config, load_config, save_config
 from .data import MelDataset
 from .drift import feature_drift_loss
+from .latents import VAE_BACKENDS
 from .models.ar import ARDriftTTS, ar_features, patchify
 from .models.text_encoder import align, duration_loss, expand, prior_loss
 from .train import build_loader, dataset_stats, grow_speakers
@@ -168,9 +169,14 @@ def run(args) -> None:
 
     vocoder = None
     if tc.get("sample_every", 0) and device == "cuda":
-        from .vocoder import load_vocoder
+        if ds.backend in VAE_BACKENDS:  # latent frames (extract-latents): the codec's decoder
+            from .latents.vocoder import LatentVocoder
 
-        vocoder = load_vocoder(tc.get("vocoder", "vocos-v2"), device)
+            vocoder = LatentVocoder(ds.backend, device, repeat=ds.latent_repeat)
+        else:
+            from .vocoder import load_vocoder
+
+            vocoder = load_vocoder(tc.get("vocoder", "vocos-v2"), device)
 
     model.train()
     if rng is not None:

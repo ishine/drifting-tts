@@ -136,3 +136,19 @@ def test_guidance_on_the_backbone_state():
     full = m.teacher_forced(m.pad_frames(cond), y, spk)
     torch.testing.assert_close(dropped[0], null[0])
     torch.testing.assert_close(dropped[1], full[1])
+
+
+def test_gta_draws_each_patch_after_the_recorded_ones():
+    """GTA (finetune-vocoder): patch t is the head's draw from the state after the *recorded* patches 0..t-1, i.e. what
+    generation continuing a prefix of the recording draws first; at temperature 0 the two agree exactly."""
+    m = _model()
+    cond, y, spk = torch.randn(1, 116, 32), torch.randn(1, 100, 32), torch.tensor([1])
+    g = m.gta(cond, y, spk, temperature=0.0)
+    assert g.shape == y.shape
+    for t in (0, 3, 6):
+        nxt = m.generate(cond, spk, temperature=0.0, prefix=y[..., : 4 * t] if t else None)[..., 4 * t: 4 * t + 4]
+        torch.testing.assert_close(g[..., 4 * t: 4 * t + 4], nxt, atol=1e-5, rtol=1e-4)
+    gen = lambda: torch.Generator().manual_seed(3)  # noqa: E731
+    a, b = m.gta(cond, y, spk, 0.5, gen()), m.gta(cond, y, spk, 0.5, gen())
+    assert torch.equal(a, b) and not torch.allclose(a, g)
+    assert m.gta(cond, y[..., :30], spk, 0.5).shape == (1, 100, 30)  # not a whole number of patches

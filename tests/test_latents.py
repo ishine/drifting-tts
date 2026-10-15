@@ -7,6 +7,9 @@ from drifting_tts.latents.dacvae import DACVAE, DACVAEBackend
 from drifting_tts.latents.dacvae import REPO as DACVAE_REPO
 from drifting_tts.latents.dacvae import REVISION as DACVAE_REVISION
 from drifting_tts.latents.layers import fold_weight_norm
+from drifting_tts.latents.mimi import FILE as MIMI_FILE
+from drifting_tts.latents.mimi import REPO as MIMI_REPO
+from drifting_tts.latents.mimi import REVISION as MIMI_REVISION
 from drifting_tts.latents.voxcpm import MODELS as VOXCPM
 from drifting_tts.latents.voxcpm import AudioVAE, VoxCPMBackend
 
@@ -126,7 +129,8 @@ def test_bigvgan_mel_frames():
 
 WEIGHTS = {"dacvae": (DACVAE_REPO, "weights.pth", DACVAE_REVISION),
            **{name: (repo, "audiovae.pth", revision) for name, (repo, revision) in VOXCPM.items()},
-           "bigvgan": ("nvidia/bigvgan_v2_24khz_100band_256x", "bigvgan_generator.pt", None)}
+           "bigvgan": ("nvidia/bigvgan_v2_24khz_100band_256x", "bigvgan_generator.pt", None),
+           "mimi": (MIMI_REPO, MIMI_FILE, MIMI_REVISION)}
 
 
 @pytest.mark.parametrize("name", BACKENDS)
@@ -136,6 +140,8 @@ def test_released_backend_roundtrip(name):
         pytest.skip(f"{name} weights not cached (large download)")
     if name == "bigvgan":
         pytest.importorskip("librosa")
+    if name == "mimi":
+        pytest.importorskip("pocket_tts")  # the [mimi] extra
     be = load_backend(name, "cpu")
     wav = 0.1 * torch.sin(torch.arange(12_000) / 24_000 * 2 * torch.pi * 220)
     z = be.encode(wav, 24_000)

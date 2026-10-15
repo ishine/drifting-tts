@@ -209,6 +209,20 @@ class ARDriftTTS(nn.Module):
             cp = cp * (~drop)[:, None, None].to(cp.dtype)
         return self.backbone(x_prev, cp, spk)
 
+    @torch.no_grad()
+    def gta(self, cond: Tensor, y: Tensor, spk: Tensor, temperature: float = 1.0,
+            generator: torch.Generator | None = None) -> Tensor:
+        """Ground-truth-aligned ("GTA") generation: every patch drawn by the head (noise at ``temperature``) from the
+        state after the *recorded* previous patches, in one teacher-forced pass. ``cond`` ``[B, C, T]`` aligned to
+        ``y`` ``[B, n_mels, T]`` -> ``[B, n_mels, T]``, frame for frame with the recording (``finetune-vocoder``)."""
+        T, k = y.shape[-1], self.patch
+        cond, y = self.pad_frames(cond), self.pad_frames(y)
+        s = self.teacher_forced(cond, y, spk)  # [B, S, dim]
+        mu = patchify(cond[:, : self.n_mels], k)
+        z = torch.randn(*s.shape[:2], self.head.noise_dim, device=s.device, generator=generator) * temperature
+        x = mu + self.head(s.flatten(0, 1), z.flatten(0, 1)).view_as(mu)
+        return unpatchify(x, k, self.n_mels)[..., :T]
+
     # ------------------------------------------------------------------------------------------------- inference
     @torch.no_grad()
     def generate(self, cond: Tensor, spk: Tensor, temperature: float = 1.0, generator: torch.Generator | None = None,

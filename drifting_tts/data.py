@@ -146,7 +146,7 @@ class MelDataset(Dataset):
             for n, line in enumerate(f):
                 e = json.loads(line)
                 n_tokens = 2 * len(e["norm_text"]) + 1
-                if (e["split"] == split and (e["quality_score"] or 0) >= min_quality
+                if (e["split"] == split and (e.get("quality_score") or 0) >= min_quality
                         and min_frames <= e["frames"] <= max_frames and n_tokens <= e["frames"]):
                     if scores and not passes(scores.get(n), rules):
                         failed += 1
