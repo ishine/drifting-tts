@@ -209,6 +209,54 @@ durations, Vocos v2):
   them as their history, with the recording's patches as the targets, so the model learns not to carry its own
   errors on. The worst voice drops from +17.7 to +12.2 dB. UTMOSv2 and WER do not move at 5k steps.
 
+## Durations re-fitted to the mean
+
+The duration predictor regresses log-durations, so it learns the geometric mean and shortens the pauses
+([ENGLISH.md](ENGLISH.md#pauses-the-duration-predictor-re-fitted-to-the-mean-72)). The Turkish models made up for it
+with per-voice tempo factors from `calibrate-durations`, which stretch every token alike: 1.13 and 1.20 for the male and
+female voices, 1.12-1.28 for the podcast voices. The pauses stayed short and the letters came out slower than the
+recordings'.
+
+`drifting-tts train-durations` re-fits only the predictor. It takes 4,000 steps on `data/tr12_eleven_podfa`, and the
+ARDrift checkpoint skips the podcast voices' speakers, which are beyond its table. Seconds per val utterance,
+recording / regressor with its factor / re-fitted with no factor:
+
+| voice | pauses at punctuation | word gaps | letters |
+|---|---|---|---|
+| studio (722) | 0.20 / 0.16 / **0.20** | 0.75 / 0.68 / **0.75** | 11.03 / 11.38 / **10.99** |
+| podcast 2 (724) | 0.18 / 0.11 / **0.16** | 0.82 / 0.57 / **0.72** | 8.63 / 8.50 / **8.55** |
+| podcast 5 (727) | 0.67 / 0.26 / **0.59** | 1.13 / 0.69 / **1.23** | 8.67 / 8.96 / **8.53** |
+| podcast 6 (728) | 0.45 / 0.20 / **0.41** | 1.03 / 0.62 / **1.08** | 8.65 / 8.92 / **8.65** |
+
+**The sentence's edges keep the log loss** (`--edges log`: its first 3 and last 2 tokens).
+- Their means carry how the clips were cut. The female voice's clips start right at the first word, so the re-fitted
+  lead-in fell to 1 frame. Whisper then heard a syllable before the first word ("kuzeninin" -> "bu zelenin"), and
+  Freya-495 WER went 3.53% -> 4.32%.
+- Long trailing silences doubled the final pause.
+- With the edges kept, the edges' frames are back to the regressor's (female lead-in 1.9 / 2.0 / 2.8 frames against
+  2.0 / 2.1 / 3.0).
+
+**The male and female voices keep their old letter tempo.**
+- They have little data: at the recordings' own tempo their letters come out faster, and Freya WER rose by
+  0.4-0.8 points.
+- Factors of 1.088 and 1.051 on the re-fitted durations give them the old letters' frames on the Freya texts
+  (letters only, the pauses excluded). The studio and podcast voices need none.
+
+Freya-495 (Vocos v2, T 0.5, no guidance, punctuation pauses), regressor -> re-fitted:
+
+| voice | WER | word errors (worse / better sentences) | UTMOSv2 |
+|---|---|---|---|
+| studio | 0.84% -> **0.61%** | 33 -> 24 (5 / 11) | 3.006 -> 3.002 |
+| male | 1.79% -> 1.74% | 70 -> 68 (26 / 29) | 2.899 -> **2.930** (95%: +0.003 to +0.058) |
+| female | 3.53% -> 3.81% | 138 -> 149 (52 / 40, sign test p = 0.25) | 2.665 -> 2.687 |
+
+The podcast voices (the voices model re-fitted the same way, no factors; 30 val utterances each, as in #73's table):
+UTMOSv2 2.258 -> **2.305**, WER 4.39% -> **4.21%**, CER 1.43% -> **1.30%**.
+
+- **Where:** both tabs of the private test Space offer both durations, re-fitted first. The Space holds only the two
+  predictors (`durations_ardrift.pt`, `durations_tr.pt`, 2.2 MB each); `scripts/deploy_test_space.sh` takes them
+  through `ARDRIFT_DURATIONS=` and `DURATIONS=`.
+
 ## Commands
 
 ```bash
@@ -227,6 +275,9 @@ drifting-tts train-ar --config configs/ar_tts_voices.yaml --workdir runs/ar_voic
 drifting-tts train-ar --config configs/ar_tts_voices_fa.yaml --workdir runs/ar_voices_fa
 drifting-tts train-bwe --data data/tr12_eleven --workdir runs/bwe
 scripts/deploy_test_space.sh <private space> <exported ARDrift> <exported voices model> runs/bwe/bwe.pt voices.json
+
+# durations re-fitted to the mean; the sentence's edges keep the log loss (the default --edges log)
+drifting-tts train-durations --model runs/ar_ft/model_ema.pt --out runs/ar_ft/durations.pt --data data/tr12_eleven_podfa
 ```
 
 ```python

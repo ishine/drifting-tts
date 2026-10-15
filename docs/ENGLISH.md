@@ -189,7 +189,9 @@ fraction of its mean. Letters vary little, so for them the two means agree.
 **The fix.** `drifting-tts train-durations` trains only the duration predictor (0.54 M parameters, the rest frozen)
 on the model's own MAS durations. It uses a Poisson loss, minimised at the mean, on the duration minus half a frame:
 synthesis rounds every duration up, which adds half a frame on average. Without that offset the ~150 tokens of a
-sentence came out 0.8 s long. 4,000 steps on `data/en_pilot`, 3 minutes on the RTX 5090.
+sentence came out 0.8 s long. 4,000 steps on `data/en_pilot`, 3 minutes on the RTX 5090. It was fitted before
+`--edges` existed (as `--edges mean`); its sentence edges match the recordings' (lead-in 0.031 s, final 0.105 s
+against 0.102 s), unlike the Turkish female voice's ([AR_DRIFT.md](AR_DRIFT.md#durations-re-fitted-to-the-mean)).
 
 Seconds per val utterance (200), by where the tokens are:
 

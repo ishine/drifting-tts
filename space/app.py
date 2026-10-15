@@ -48,6 +48,18 @@ ARDRIFT_FILE = Path(__file__).with_name("ardrift.pt")
 ardrift = Synthesizer(ARDRIFT_FILE, DEVICE, vocoder="vocos-v2", pause="punct") if ARDRIFT_FILE.is_file() else None
 if ardrift is not None:
     RELEASES = {"ARDrift (experimental): autoregressive, intonation its own": ardrift, **RELEASES}
+# ARDrift with its duration predictor re-fitted to the mean (train-durations): pauses as long as the recordings', when
+# durations_ardrift.pt is beside the app (the private test Space); the two share one model, its durations are swapped
+ARDRIFT_DURATIONS: dict[int, dict] = {}
+DURATIONS_FILE = Path(__file__).with_name("durations_ardrift.pt")
+if ardrift is not None and DURATIONS_FILE.is_file():
+    from drifting_tts.train_durations import duration_choices, use_durations
+
+    choices = duration_choices(ardrift.model, DURATIONS_FILE, "new", "old")
+    ardrift_pauses = ardrift.variant()
+    ARDRIFT_DURATIONS = {id(ardrift_pauses): choices["new"], id(ardrift): choices["old"]}
+    RELEASES = {"ARDrift (experimental): natural pauses (durations re-fitted to the mean)": ardrift_pauses,
+                **RELEASES}
 VOICES = {"Studio male voice (recommended)": "studio", "Male voice": "male", "Female voice": "female"}
 MAX_CHARS = 600
 
@@ -102,7 +114,10 @@ def generate(text, release, voice, temperature, guidance, prosody_temperature, r
     if not normalize(text):
         raise gr.Error("Nothing to read after normalisation.")
     synth, note = RELEASES[release], ""
-    if synth is ardrift:
+    is_ardrift = synth is ardrift or id(synth) in ARDRIFT_DURATIONS
+    if id(synth) in ARDRIFT_DURATIONS:
+        use_durations(ardrift.model, ARDRIFT_DURATIONS[id(synth)])
+    if is_ardrift:
         guidance = 1.0
         note = " ARDrift: no guidance (it makes it worse)."
     elif synth is not v31 and VOICES[voice] != "studio":  # v3.2 with the vocoder balanced for the other voices
@@ -115,7 +130,7 @@ def generate(text, release, voice, temperature, guidance, prosody_temperature, r
                       prosody_temperature=float(prosody_temperature) if synth.prosody is not None else None)
     took = time.time() - t0
     audio = (SAMPLE_RATE, np.clip(wav.float().numpy(), -1, 1))
-    passes = "23 generator steps per second of audio" if synth is ardrift else "one generator pass per sentence"
+    passes = "23 generator steps per second of audio" if is_ardrift else "one generator pass per sentence"
     stats = (f"{info['seconds']:.1f} s of audio in {took:.2f} s, {passes}. "
              f"Normalised text: *{normalize(text)}*{note}")
     return audio, stats
