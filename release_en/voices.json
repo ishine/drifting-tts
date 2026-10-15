@@ -1,0 +1,36 @@
+{
+ "voices": [
+  {
+   "label": "Voice 1 (deep, 109 Hz)",
+   "id": 3726
+  },
+  {
+   "label": "Voice 2 (deep, 100 Hz)",
+   "id": 3954
+  },
+  {
+   "label": "Voice 3 (deep, 116 Hz)",
+   "id": 1933
+  },
+  {
+   "label": "Voice 4 (deep, 111 Hz)",
+   "id": 572
+  },
+  {
+   "label": "Voice 5 (high, 182 Hz)",
+   "id": 1952
+  },
+  {
+   "label": "Voice 6 (high, 171 Hz)",
+   "id": 3964
+  },
+  {
+   "label": "Voice 7 (high, 184 Hz)",
+   "id": 3681
+  },
+  {
+   "label": "Voice 8 (high, 186 Hz)",
+   "id": 1722
+  }
+ ]
+}

@@ -96,6 +96,8 @@ def export_tts(ck: dict, half: bool = False) -> dict:
     if "data" in cfg:
         cfg["data"] = {**cfg["data"], "root": GENERIC_DATA_ROOT}
     out["config"] = cfg
+    if "durations" in out:  # train-durations' record: how the predictor was fitted, without the data root's name
+        out["durations"] = {k: v for k, v in out["durations"].items() if k != "data"}
     return out
 
 
@@ -123,7 +125,8 @@ def scan(path: str | Path, terms: dict[str, list[str]] | None = None) -> dict[st
     the pickle's strings or in the file's printable runs. All zero: nothing private found."""
     strings = pickle_strings(path)
     runs = printable_runs(path)
-    hits = {"paths": sum(bool(PATH_RE.search(s)) for s in strings)}
+    # a Hub reference (hf://datasets/<public dataset>/data/*.parquet: the streamed corpus) is not a local path
+    hits = {"paths": sum(bool(PATH_RE.search(s)) and not s.startswith("hf://") for s in strings)}
     text = "\n".join(strings + runs).lower()
     for cat, words in (terms or {}).items():
         hits[cat] = sum(text.count(w.lower()) for w in {w for w in words if len(w) >= 4})

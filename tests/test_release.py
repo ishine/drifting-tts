@@ -182,6 +182,12 @@ def test_publish_exports_and_scan(tmp_path):
     torch.save(clean, tmp_path / "clean.pt")
     assert scan(tmp_path / "clean.pt", terms) == {"paths": 0, "names": 0}
     assert "ema" in pickle_strings(tmp_path / "clean.pt")
+    streamed = export_tts({**raw, "durations": {"loss": "poisson", "data": "private_corpus"}, "config": {
+        **raw["config"], "data": {"root": "/x/private_corpus", "stream": {"files": "hf://datasets/o/d/data/*.parquet",
+                                                                          "cache": "/workspace/stream_cache"}}}})
+    assert streamed["durations"] == {"loss": "poisson"}  # train-durations' record without the data root's name
+    torch.save(streamed, tmp_path / "streamed.pt")
+    assert scan(tmp_path / "streamed.pt", terms) == {"paths": 0, "names": 0}  # a Hub reference is not a local path
     from drifting_tts.train import load_tts
 
     half = export_tts(raw, half=True)  # fp16 weights, loaded back into the fp32 model
