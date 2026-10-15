@@ -208,6 +208,10 @@ durations, Vocos v2):
 - **C goes at the cause.** A first teacher-forced pass draws the model's own patches. Half the utterances then use
   them as their history, with the recording's patches as the targets, so the model learns not to carry its own
   errors on. The worst voice drops from +17.7 to +12.2 dB. UTMOSv2 and WER do not move at 5k steps.
+- **Longer does not help.** Continued to 20k steps, C reaches +6.0 dB at 10k and +6.5 dB at 20k, with UTMOSv2 2.246 /
+  2.247 and WER 4.10% / 4.26%: it levels off 2-3 dB below the control, and naturalness does not follow. No new voices
+  model was deployed. The recordings' own noise (DNSMOS OVRL ~3.0) is the likelier source, which is what #71 (speech
+  restoration of the six voices' recordings) is about.
 
 ## Durations re-fitted to the mean
 
