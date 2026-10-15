@@ -2,8 +2,10 @@
 fine-tuned with six voices learned from 16 kHz recordings, and the mel bandwidth extension (drifting_tts/bwe.py) that
 fills their mels above ~8 kHz. Runs on its own too (``python voices_app.py``).
 
-Files beside this app (``scripts/deploy_test_space.sh``): ``ardrift_voices.pt`` (the model), ``bwe.pt`` (MelBWE) and
-``voices.json`` (each voice's label, speaker ID, whether its recordings are band-limited and its measured results).
+Files beside this app (``scripts/deploy_test_space.sh``): ``ardrift_voices.pt`` (the model), ``bwe.pt`` (MelBWE),
+``voices.json`` (each voice's label, speaker ID, whether its recordings are band-limited and its measured results)
+and, optionally, ``durations_tr.pt``: the duration predictor re-fitted to the mean duration (``train-durations``),
+offered next to the model's own predictor and its per-voice tempo factors.
 """
 
 import json
@@ -18,6 +20,7 @@ from drifting_tts.audio import SAMPLE_RATE
 from drifting_tts.bwe import MelBWE, extend_vocoder
 from drifting_tts.synthesize import Synthesizer
 from drifting_tts.text import normalize
+from drifting_tts.train_durations import duration_choices, use_durations
 
 try:
     import spaces
@@ -34,6 +37,10 @@ synth = Synthesizer(HERE / "ardrift_voices.pt", DEVICE, vocoder="vocos-v2", paus
 bwe = MelBWE.load(HERE / "bwe.pt", DEVICE)
 wide = {c: synth.variant(vocoder=extend_vocoder(synth.vocoder, bwe, c))
         for c in {v["cutoff_hz"] for v in CFG["voices"] if v.get("band_limited")}}
+DURATIONS = {}  # label -> durations; the synthesizers above share the one model, its durations are swapped
+if (HERE / "durations_tr.pt").is_file():  # first: the default
+    DURATIONS = duration_choices(synth.model, HERE / "durations_tr.pt", "Yeni: ortalama süreler",
+                                 "Eski: modelin kendi süreleri ve ses başına hız katsayıları")
 MAX_CHARS = 600
 
 EXAMPLES = [
@@ -57,7 +64,7 @@ def results_md() -> str:
 
 
 @gpu
-def generate(text, voice, extend, temperature, rate, seed):
+def generate(text, voice, extend, durations, temperature, rate, seed):
     text = " ".join((text or "").split())
     if not text:
         raise gr.Error("Lütfen Türkçe bir metin girin.")
@@ -66,6 +73,8 @@ def generate(text, voice, extend, temperature, rate, seed):
     if not normalize(text):
         raise gr.Error("Normalleştirmeden sonra okunacak bir şey kalmadı.")
     v = VOICES[voice]
+    if DURATIONS:
+        use_durations(synth.model, DURATIONS[durations])
     s = wide[v["cutoff_hz"]] if extend and v.get("band_limited") else synth
     t0 = time.time()
     wav, info = s(text, speaker=int(v["id"]), cfg_scale=1.0, temperature=float(temperature),
@@ -89,6 +98,9 @@ with gr.Blocks(title="Drifting TTS: yeni sesler (test)") as demo:
             text = gr.Textbox(label="Türkçe metin", lines=4, max_length=MAX_CHARS, value=EXAMPLES[0][0])
             voice = gr.Dropdown(list(VOICES), value=next(iter(VOICES)), label="Ses")
             extend = gr.Checkbox(value=True, label="Bant genişletme (16 kHz sesler için)")
+            durations = gr.Radio(list(DURATIONS) or ["-"], value=next(iter(DURATIONS), "-"), label="Duraklamalar",
+                                 info="Yeni: virgül ve kelime aralarında kayıtlardaki kadar durur",
+                                 visible=bool(DURATIONS))
             with gr.Accordion("Ayarlar", open=False):
                 temperature = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Gürültü sıcaklığı",
                                         info="ARDrift'te sonucu çok az değiştirir (0.5 ölçülen ayar)")
@@ -100,7 +112,7 @@ with gr.Blocks(title="Drifting TTS: yeni sesler (test)") as demo:
             stats = gr.Markdown()
     gr.Examples(EXAMPLES, inputs=[text])
     gr.Markdown(results_md())
-    button.click(generate, [text, voice, extend, temperature, rate, seed], [audio, stats])
+    button.click(generate, [text, voice, extend, durations, temperature, rate, seed], [audio, stats])
 
 if __name__ == "__main__":
     demo.queue(max_size=20).launch()

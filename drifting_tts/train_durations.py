@@ -14,6 +14,11 @@ the model's own MAS durations. It uses the Poisson loss ``exp(logw) - t * logw``
 (:func:`~drifting_tts.models.text_encoder.durations_to_alignment`), which adds half a frame on average. Without the
 offset, the ~150 tokens of an English sentence (letters and the blanks between them) come out 0.8 s too long.
 
+The sentence's edges (its first 3 and last 2 tokens) keep the log loss (``--edges log``). Their means carry how the
+clips were cut. The Turkish female voice's clips start right at the first word, so the re-fitted lead-in fell to 1
+frame and its first words were garbled: Freya-495 WER 3.53% -> 4.32%, mostly a syllable put before the first word.
+Its clips also end with long silences, which doubled the final pause.
+
 The output is a copy of the checkpoint with the new predictor; ``durations`` records how it was fitted. Per-voice
 duration factors from ``calibrate-durations`` are dropped, since they were measured on the old predictor: run that
 command again on the output if wanted.
@@ -44,6 +49,10 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--loss", choices=LOSSES, default="poisson",
                    help="poisson: the mean duration (minus the half frame that rounding up adds); log: the training "
                         "loss (the geometric mean), for comparison")
+    p.add_argument("--edges", choices=("log", "mean"), default="log",
+                   help="the sentence's first 3 and last 2 tokens: log keeps the training loss (geometric mean) there; "
+                        "their means carry the clips' cutting (a start right at the first word, long trailing "
+                        "silences), which garbles first words")
     p.add_argument("--steps", type=int, default=4000)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--batch-frames", type=int, default=None, help="mel frames per batch (default: the model's)")
@@ -68,16 +77,24 @@ def duration_targets(model, batch: dict, device) -> tuple:
     return dur_in, x_mask, attn.sum(-1)
 
 
-def duration_fit_loss(logw: torch.Tensor, frames: torch.Tensor, x_mask: torch.Tensor, kind: str) -> torch.Tensor:
-    """``logw`` ``[B, 1, N]`` against the MAS frames ``[B, N]`` (>= 1 on real tokens), mean over tokens."""
+def duration_fit_loss(logw: torch.Tensor, frames: torch.Tensor, x_mask: torch.Tensor, kind: str,
+                      edges: bool = False) -> torch.Tensor:
+    """``logw`` ``[B, 1, N]`` against the MAS frames ``[B, N]`` (>= 1 on real tokens), mean over tokens. ``edges``: the
+    sentence's first 3 and last 2 tokens (:func:`~drifting_tts.models.prosody_net.edge_tokens`) keep the log loss of
+    training, whatever ``kind`` is."""
     m = x_mask[:, 0]
     logw = logw[:, 0]
+    log_loss = (logw - torch.log(frames.clamp_min(1e-8))) ** 2
     if kind == "poisson":  # the mean of d - 0.5: synthesis rounds up
         per = torch.exp(logw) - (frames - 0.5).clamp_min(0) * logw
     elif kind == "log":
-        per = (logw - torch.log(frames.clamp_min(1e-8))) ** 2
+        per = log_loss
     else:
         raise ValueError(f"loss must be one of {LOSSES}, got {kind!r}")
+    if edges:
+        from .models.prosody_net import edge_tokens
+
+        per = torch.where(edge_tokens(m.sum(1).long(), m.shape[1]), log_loss, per)
     return (per * m).sum() / m.sum()
 
 
@@ -96,6 +113,27 @@ def length_ratios(model, ds: MelDataset, num: int, device) -> np.ndarray:
     return np.array(out)
 
 
+def duration_choices(model, path: str | Path, new: str, old: str) -> dict[str, dict]:
+    """Two sets of durations for one loaded model, to switch per request (a Space, :func:`use_durations`): ``new``,
+    the predictor of ``path`` (``publish.export_durations``) with its own per-voice factors (none after
+    ``train-durations``), and ``old``, the model's own predictor and factors."""
+    import copy
+
+    ck = torch.load(path, map_location="cpu", weights_only=True)
+    fitted = copy.deepcopy(model.encoder.duration)
+    fitted.load_state_dict(ck["duration"])
+    return {new: {"module": fitted.eval(), "scale": float(ck.get("duration_scale", 1.0)),
+                  "scales": {int(k): float(v) for k, v in ck.get("duration_scales", {}).items()}},
+            old: {"module": model.encoder.duration, "scale": float(model.duration_scale),
+                  "scales": dict(model.duration_scales)}}
+
+
+def use_durations(model, choice: dict) -> None:
+    """Point ``model`` at one entry of :func:`duration_choices`: its duration predictor and per-voice factors."""
+    model.encoder.duration = choice["module"]
+    model.duration_scale, model.duration_scales = choice["scale"], choice["scales"]
+
+
 def run(args) -> None:
     from .train import load_tts
 
@@ -106,6 +144,13 @@ def run(args) -> None:
     ds = MelDataset(root, "train", min_quality=d.get("min_quality", 0.0), max_frames=d.get("max_frames", 1500),
                     filters=d.get("filters"))
     val = MelDataset(root, "val", min_frames=1, max_frames=10**9) if args.val else None
+    n_spk = model.encoder.spk.num_embeddings  # a corpus that grew after the model (merge-data): its speakers only
+    for split in (ds, val):
+        if split is not None and any(e["spk_id"] >= n_spk for e in split.items):
+            kept = [e for e in split.items if e["spk_id"] < n_spk]
+            print(f"{len(split.items) - len(kept)} utterances of speakers beyond the model's {n_spk} left out",
+                  flush=True)
+            split.items = kept
     if val is not None and not len(val):
         val = None
     sampler = BucketBatchSampler([ds.frames(i) for i in range(len(ds))],
@@ -125,7 +170,7 @@ def run(args) -> None:
     it, t0, agg = infinite(loader), time.time(), []
     for step in range(1, args.steps + 1):
         dur_in, x_mask, frames = duration_targets(model, next(it), args.device)
-        loss = duration_fit_loss(dp(dur_in, x_mask), frames, x_mask, args.loss)
+        loss = duration_fit_loss(dp(dur_in, x_mask), frames, x_mask, args.loss, edges=args.edges == "log")
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(dp.parameters(), 1.0)
@@ -147,7 +192,8 @@ def run(args) -> None:
         raise KeyError(f"{args.model} has no {sorted(missing)[:3]}: not the model that was trained")
     ck["ema"] = {**ck["ema"], **{k: v.to(ck["ema"][k].dtype) for k, v in new.items()}}
     dropped = [k for k in ("duration_scale", "duration_scales") if ck.pop(k, None) is not None]
-    ck["durations"] = {"loss": args.loss, "steps": args.steps, "lr": args.lr, "data": Path(root).name}
+    ck["durations"] = {"loss": args.loss, "edges": args.edges, "steps": args.steps, "lr": args.lr,
+                       "data": Path(root).name}
     save_checkpoint(Path(args.out), **ck)
     note = f"; dropped {', '.join(dropped)} (re-run calibrate-durations if wanted)" if dropped else ""
     print(f"wrote {args.out}{note}", flush=True)

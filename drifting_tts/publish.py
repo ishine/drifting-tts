@@ -58,13 +58,16 @@ def export_bigvgan(ck: dict, half: bool = False) -> dict:
 
 
 def export_durations(ck: dict) -> dict:
-    """The duration predictor of a ``train-durations`` checkpoint alone -> ``{duration, durations}`` (its state dict and
-    how it was fitted), for a Space that already holds the model: a few hundred kB against the model's 356 MB."""
+    """The duration predictor of a ``train-durations`` checkpoint alone -> ``{duration, durations, duration_scale,
+    duration_scales}`` (its state dict, how it was fitted and its per-voice factors), for a Space that already holds
+    the model: 2 MB against the model's hundreds (``train_durations.duration_choices`` loads it)."""
     prefix = "encoder.duration."
     state = {k[len(prefix):]: v for k, v in ck["ema"].items() if k.startswith(prefix)}
     if "durations" not in ck or not state:
         raise ValueError("not a train-durations checkpoint (no 'durations' record)")
-    return {"duration": _tensors_to_cpu(state), "durations": dict(ck["durations"])}
+    return {"duration": _tensors_to_cpu(state), "durations": dict(ck["durations"]),
+            "duration_scale": float(ck.get("duration_scale", 1.0)),
+            "duration_scales": {int(k): float(v) for k, v in ck.get("duration_scales", {}).items()}}
 
 
 def _clean_config(node, key: str = ""):

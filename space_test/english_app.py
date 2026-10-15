@@ -10,7 +10,6 @@ offered next to Vocos v2, and ``durations_en.pt``: the duration predictor re-fit
 next to the model's own.
 """
 
-import copy
 import json
 import os
 import time
@@ -18,10 +17,10 @@ from pathlib import Path
 
 import gradio as gr
 import numpy as np
-import torch
 
 from drifting_tts.audio import SAMPLE_RATE
 from drifting_tts.synthesize import Synthesizer
+from drifting_tts.train_durations import duration_choices, use_durations
 
 try:
     import spaces
@@ -38,11 +37,10 @@ synth = Synthesizer(HERE / "ardrift_en.pt", DEVICE, vocoder="vocos-v2")
 VOCODERS = {"Vocos v2": synth}
 if (HERE / "bigvgan_en.pt").is_file():  # first: the default
     VOCODERS = {"BigVGAN-v2, İngilizce ince ayar": synth.variant(vocoder=str(HERE / "bigvgan_en.pt")), **VOCODERS}
-DURATIONS = {}  # label -> duration predictor; every synthesizer above shares the one model, its predictor is swapped
+DURATIONS = {}  # label -> durations; every synthesizer above shares the one model, its durations are swapped
 if (HERE / "durations_en.pt").is_file():  # first: the default
-    fitted = copy.deepcopy(synth.model.encoder.duration)
-    fitted.load_state_dict(torch.load(HERE / "durations_en.pt", map_location="cpu", weights_only=True)["duration"])
-    DURATIONS = {"Yeni: ortalama süreler": fitted.eval(), "Eski: modelin kendi süreleri": synth.model.encoder.duration}
+    DURATIONS = duration_choices(synth.model, HERE / "durations_en.pt", "Yeni: ortalama süreler",
+                                 "Eski: modelin kendi süreleri")
 MAX_CHARS = 600
 
 EXAMPLES = [
@@ -70,7 +68,7 @@ def generate(text, voice, vocoder, durations, temperature, rate, seed):
         raise gr.Error("Normalleştirmeden sonra okunacak bir şey kalmadı.")
     v = VOICES[voice]
     if DURATIONS:
-        synth.model.encoder.duration = DURATIONS[durations]
+        use_durations(synth.model, DURATIONS[durations])
     t0 = time.time()
     wav, info = VOCODERS[vocoder](text, speaker=int(v["id"]), cfg_scale=1.0, temperature=float(temperature),
                       length_scale=1.0 / float(rate), seed=int(seed))
